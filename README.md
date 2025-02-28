@@ -217,7 +217,7 @@ mxd_deploy_contract(wasm_code, wasm_size, &state);
 Please read our [Contributing Guidelines](CONTRIBUTING.md) before submitting pull requests.
 
 ## 📄 License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU v3.0 License - see the [LICENSE](LICENSE) file for details.
 
 ## 🔗 Links
 - [Issue Tracker](https://github.com/AlanRuno/mxdlib/issues)
