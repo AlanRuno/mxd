@@ -1,0 +1,9 @@
+{
+    "node_id": "mainnet_node",
+    "port": 8000,
+    "data_dir": "./data",
+    "network_type": "mainnet",
+    "bootstrap_nodes": ["127.0.0.1:8001", "127.0.0.1:8002"],
+    "metrics_interval": 1000,
+    "log_level": "info"
+}

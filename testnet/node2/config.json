@@ -1,0 +1,6 @@
+{
+    "node_id": "node2",
+    "port": 8002,
+    "data_dir": "/home/ubuntu/repos/mxdlib/testnet/node2/data",
+    "bootstrap_nodes": ["127.0.0.1:8000"]
+}

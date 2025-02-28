@@ -1,0 +1,13 @@
+{
+    "node_id": "mainnet_node_1",
+    "network_type": "mainnet",
+    "port": 8000,
+    "data_dir": "./data",
+    "node_name": "MXD Mainnet Node 1",
+    "initial_stake": 120.0,
+    "metrics_interval": 1000,
+    "bootstrap_nodes": [
+        "127.0.0.1:8001",
+        "127.0.0.1:8002"
+    ]
+}

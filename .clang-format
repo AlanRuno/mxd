@@ -1,0 +1,18 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+IndentWidth: 2
+UseTab: Never
+BreakBeforeBraces: Attach
+AllowShortIfStatementsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Empty
+ColumnLimit: 80
+AlignTrailingComments: true
+SpaceAfterCStyleCast: false
+PointerAlignment: Right
+SortIncludes: true
+IndentCaseLabels: false
+AlignConsecutiveMacros: true
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+---

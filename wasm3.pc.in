@@ -1,0 +1,11 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: wasm3
+Description: High performance WebAssembly interpreter
+Version: 1.0.0
+Requires: libuv uvwasi
+Libs: -L${libdir} -lm3
+Cflags: -I${includedir}
