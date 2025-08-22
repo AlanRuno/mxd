@@ -2,19 +2,19 @@
 
 set -e
 
-
 PROJECT_ID=${1:-"your-gcp-project"}
-CLUSTER_NAME=${2:-"mxd-cluster"}
+CLUSTER_NAME=${2:-"mxd-cluster-small"}
 REGION=${3:-"us-central1"}
-ENVIRONMENT=${4:-"production"}
+ENVIRONMENT=${4:-"development"}
 IMAGE_TAG=${5:-"latest"}
 
-echo "=== MXD Library GKE Deployment ==="
+echo "=== MXD Library GKE Small Deployment ==="
 echo "Project ID: $PROJECT_ID"
 echo "Cluster: $CLUSTER_NAME"
 echo "Region: $REGION"
 echo "Environment: $ENVIRONMENT"
 echo "Image Tag: $IMAGE_TAG"
+echo "NOTE: This is a quota-optimized deployment for development/testing"
 echo
 
 command -v gcloud >/dev/null 2>&1 || { echo "gcloud CLI is required but not installed. Aborting." >&2; exit 1; }
@@ -30,12 +30,12 @@ gcloud services enable containerregistry.googleapis.com
 gcloud services enable compute.googleapis.com
 
 if ! gcloud container clusters describe $CLUSTER_NAME --region=$REGION >/dev/null 2>&1; then
-    echo "Creating GKE cluster..."
+    echo "Creating small GKE cluster (quota-optimized)..."
     gcloud container clusters create $CLUSTER_NAME \
         --region=$REGION \
         --num-nodes=2 \
         --min-nodes=1 \
-        --max-nodes=6 \
+        --max-nodes=4 \
         --enable-autoscaling \
         --machine-type=e2-standard-2 \
         --disk-size=50GB \
@@ -59,11 +59,11 @@ kubectl apply -f - <<EOF
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: ssd-retain
+  name: standard-retain
 provisioner: kubernetes.io/gce-pd
 parameters:
-  type: pd-ssd
-  replication-type: regional-pd
+  type: pd-standard
+  replication-type: none
 reclaimPolicy: Retain
 allowVolumeExpansion: true
 volumeBindingMode: WaitForFirstConsumer
@@ -78,46 +78,38 @@ docker push gcr.io/$PROJECT_ID/mxdlib:$IMAGE_TAG
 
 kubectl create namespace mxd-$ENVIRONMENT --dry-run=client -o yaml | kubectl apply -f -
 
-sed "s/PROJECT_ID/$PROJECT_ID/g" kubernetes/gke-deployment.yaml > /tmp/gke-deployment-$ENVIRONMENT.yaml
-sed -i "s/BUCKET_NAME/$PROJECT_ID-mxd-backups/g" /tmp/gke-deployment-$ENVIRONMENT.yaml
+sed "s/PROJECT_ID/$PROJECT_ID/g" kubernetes/gke-deployment-small.yaml > /tmp/gke-deployment-small-$ENVIRONMENT.yaml
+sed -i "s/BUCKET_NAME/$PROJECT_ID-mxd-backups/g" /tmp/gke-deployment-small-$ENVIRONMENT.yaml
 
 echo "Applying Kubernetes manifests..."
-kubectl apply -f /tmp/gke-deployment-$ENVIRONMENT.yaml -n mxd-$ENVIRONMENT
-
-echo "Setting up monitoring..."
-kubectl apply -f kubernetes/gke-monitoring.yaml
+kubectl apply -f /tmp/gke-deployment-small-$ENVIRONMENT.yaml -n mxd-$ENVIRONMENT
 
 echo "Creating static IP..."
-gcloud compute addresses create mxd-ip --global || echo "Static IP already exists"
+gcloud compute addresses create mxd-ip-small --global || echo "Static IP already exists"
 
 echo "Waiting for deployment to be ready..."
-kubectl wait --for=condition=available --timeout=300s deployment/mxd-enterprise-gke -n mxd-$ENVIRONMENT
+kubectl wait --for=condition=available --timeout=300s deployment/mxd-enterprise-gke-small -n mxd-$ENVIRONMENT
 
 echo
-echo "=== Deployment Complete ==="
+echo "=== Small Deployment Complete ==="
 echo "Getting service information..."
 kubectl get services -n mxd-$ENVIRONMENT
 kubectl get ingress -n mxd-$ENVIRONMENT
 
 echo
 echo "External Load Balancer IP:"
-kubectl get service mxd-service-external -n mxd-$ENVIRONMENT -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+kubectl get service mxd-service-external-small -n mxd-$ENVIRONMENT -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
 echo
-
-echo
-echo "Monitoring URLs:"
-echo "Prometheus: http://$(kubectl get service prometheus-service -n mxd-monitoring -o jsonpath='{.status.loadBalancer.ingress[0].ip}'):9090"
-echo "Grafana: http://$(kubectl get service grafana-service -n mxd-monitoring -o jsonpath='{.status.loadBalancer.ingress[0].ip}'):3000"
-echo "Default Grafana credentials: admin/admin123 (CHANGE THIS!)"
 
 echo
 echo "To check deployment status:"
 echo "kubectl get pods -n mxd-$ENVIRONMENT"
-echo "kubectl logs -f deployment/mxd-enterprise-gke -n mxd-$ENVIRONMENT"
+echo "kubectl logs -f deployment/mxd-enterprise-gke-small -n mxd-$ENVIRONMENT"
 
 echo
 echo "To scale deployment:"
-echo "kubectl scale deployment mxd-enterprise-gke --replicas=5 -n mxd-$ENVIRONMENT"
+echo "kubectl scale deployment mxd-enterprise-gke-small --replicas=3 -n mxd-$ENVIRONMENT"
 
 echo
-echo "Deployment completed successfully!"
+echo "Small deployment completed successfully!"
+echo "Resource usage: ~4-8 vCPUs, ~200GB storage"
