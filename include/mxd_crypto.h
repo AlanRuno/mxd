@@ -11,11 +11,17 @@ extern "C" {
 // SHA-512 hashing
 int mxd_sha512(const uint8_t *input, size_t length, uint8_t output[64]);
 
+// SHA-256 hashing
+int mxd_sha256(const uint8_t *input, size_t length, uint8_t output[32]);
+
 // SHA-1 hashing
 int mxd_sha1(const uint8_t *input, size_t length, uint8_t output[20]);
 
 // RIPEMD-160 hashing
 int mxd_ripemd160(const uint8_t *input, size_t length, uint8_t output[20]);
+
+// HASH160 (SHA-256 followed by RIPEMD-160)
+int mxd_hash160(const uint8_t *input, size_t length, uint8_t output[20]);
 
 // Argon2 key derivation
 int mxd_argon2(const char *input, const uint8_t *salt, uint8_t *output,

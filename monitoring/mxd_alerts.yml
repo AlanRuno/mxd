@@ -1,0 +1,56 @@
+groups:
+  - name: mxd_node_alerts
+    rules:
+      - alert: MXDNodeDown
+        expr: up{job="mxd-nodes"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MXD Node {{ $labels.instance }} is down"
+          description: "MXD Node {{ $labels.instance }} has been down for more than 1 minute."
+
+      - alert: MXDLowTPS
+        expr: mxd_tps_current < 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MXD Node {{ $labels.instance }} has low TPS"
+          description: "MXD Node {{ $labels.instance }} TPS is {{ $value }}, below threshold of 10."
+
+      - alert: MXDHighLatency
+        expr: mxd_network_latency_ms > 3000
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MXD Node {{ $labels.instance }} has high network latency"
+          description: "MXD Node {{ $labels.instance }} network latency is {{ $value }}ms, above threshold of 3000ms."
+
+      - alert: MXDHighMemoryUsage
+        expr: mxd_memory_usage_bytes > 1073741824  # 1GB
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MXD Node {{ $labels.instance }} has high memory usage"
+          description: "MXD Node {{ $labels.instance }} memory usage is {{ $value }} bytes."
+
+      - alert: MXDConsensusEfficiencyLow
+        expr: mxd_consensus_efficiency < 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MXD Node {{ $labels.instance }} has low consensus efficiency"
+          description: "MXD Node {{ $labels.instance }} consensus efficiency is {{ $value }}, below 80%."
+
+      - alert: MXDFewActivePeers
+        expr: mxd_peers_active < 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MXD Node {{ $labels.instance }} has few active peers"
+          description: "MXD Node {{ $labels.instance }} has only {{ $value }} active peers."

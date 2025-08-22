@@ -1,5 +1,6 @@
+#include "../include/mxd_logging.h"
+
 #include <limits.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -11,6 +12,7 @@
 #include "../include/mxd_dht.h"
 #include "../include/mxd_p2p.h"
 #include "../include/blockchain/mxd_rsc.h"
+#include "../include/mxd_logging.h"
 #include "metrics_display.h"
 
 static volatile int keep_running = 1;
@@ -20,9 +22,8 @@ static mxd_node_stake_t node_stake;
 static pthread_mutex_t metrics_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void handle_signal(int signum) {
-    printf("\nReceived signal %d, terminating node %s...\n", 
+    MXD_LOG_INFO("node", "Received signal %d, terminating node %s...", 
            signum, current_config.node_id);
-    fflush(stdout);
     keep_running = 0;
 }
 
@@ -54,7 +55,7 @@ void* metrics_collector(void* arg) {
         } else {
             consecutive_errors++;
             if (consecutive_errors > 10) {  // Performance requirement: max 10 consecutive errors
-                fprintf(stderr, "Warning: High consecutive error count: %lu\n", consecutive_errors);
+                MXD_LOG_WARN("node", "High consecutive error count: %lu", consecutive_errors);
             }
             // Record failed message
             mxd_record_message_result(&node_metrics, 0);
@@ -70,7 +71,7 @@ void* metrics_collector(void* arg) {
         if (time_diff > 0) {
             double tps = node_metrics.message_success / time_diff;
             if (tps < 10.0) {  // Performance requirement: ≥10 TPS
-                fprintf(stderr, "Warning: Low TPS: %.2f\n", tps);
+                MXD_LOG_WARN("node", "Low TPS: %.2f", tps);
             }
         }
         
@@ -92,12 +93,12 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             int port = atoi(argv[++i]);
             if (port < 1024 || port > 65535) {
-                fprintf(stderr, "Error: Port must be between 1024 and 65535\n");
+                MXD_LOG_ERROR("node", "Port must be between 1024 and 65535");
                 return 1;
             }
             override_port = (uint16_t)port;
         } else {
-            printf("Usage: %s [--config <file>] [--port <number>]\n", argv[0]);
+            MXD_LOG_ERROR("node", "Usage: %s [--config <file>] [--port <number>]", argv[0]);
             return 1;
         }
     }
@@ -115,7 +116,7 @@ int main(int argc, char** argv) {
             strcpy(default_config_path, "./default_config.json");
         }
         config_path = default_config_path;
-        printf("No config file specified, using default configuration: %s\n", config_path);
+        MXD_LOG_INFO("node", "No config file specified, using default configuration: %s", config_path);
     }
 
     // Set up signal handlers
@@ -125,19 +126,19 @@ int main(int argc, char** argv) {
     
     // Load configuration
     if (mxd_load_config(config_path, &current_config) != 0) {
-        fprintf(stderr, "Failed to load configuration from %s\n", config_path);
+        MXD_LOG_ERROR("node", "Failed to load configuration from %s", config_path);
         return 1;
     }
     
     // Override port if specified on command line
     if (override_port > 0) {
         current_config.port = override_port;
-        printf("Port overridden from command line: %d\n", override_port);
+        MXD_LOG_INFO("node", "Port overridden from command line: %d", override_port);
     }
     
     // Initialize metrics
     if (mxd_init_metrics(&node_metrics) != 0) {
-        fprintf(stderr, "Failed to initialize metrics\n");
+        MXD_LOG_ERROR("node", "Failed to initialize metrics");
         return 1;
     }
     
@@ -145,30 +146,30 @@ int main(int argc, char** argv) {
     size_t peer_count = 0;
     mxd_peer_t peers[MXD_MAX_PEERS];
     if (mxd_get_peers(peers, &peer_count) == 0) {
-        printf("Connected peers: %zu\n", peer_count);
+        MXD_LOG_INFO("node", "Connected peers: %zu", peer_count);
     }
     
     // Initialize DHT node
     if (mxd_init_node(&current_config) != 0) {
-        fprintf(stderr, "Failed to initialize DHT node\n");
+        MXD_LOG_ERROR("node", "Failed to initialize DHT node");
         return 1;
     }
     
     // Start DHT service
     if (mxd_start_dht(current_config.port) != 0) {
-        fprintf(stderr, "Failed to start DHT service\n");
+        MXD_LOG_ERROR("node", "Failed to start DHT service");
         return 1;
     }
     
     // Start metrics collector thread
     pthread_t collector_thread;
     if (pthread_create(&collector_thread, NULL, metrics_collector, NULL) != 0) {
-        fprintf(stderr, "Failed to start metrics collector\n");
+        MXD_LOG_ERROR("node", "Failed to start metrics collector");
         mxd_stop_dht();
         return 1;
     }
     
-    printf("Node started successfully\n");
+    MXD_LOG_INFO("node", "Node started successfully");
     
     // Main display loop
     while (keep_running) {
@@ -187,6 +188,6 @@ int main(int argc, char** argv) {
     // Cleanup
     pthread_join(collector_thread, NULL);
     mxd_stop_dht();
-    printf("Node terminated successfully\n");
+    MXD_LOG_INFO("node", "Node terminated successfully");
     return 0;
 }

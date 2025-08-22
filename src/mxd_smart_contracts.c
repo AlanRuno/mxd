@@ -1,6 +1,7 @@
+#include "mxd_logging.h"
+
 #include "../include/mxd_smart_contracts.h"
 #include "../include/mxd_crypto.h"
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wasm3/wasm3.h>
@@ -82,14 +83,14 @@ int mxd_deploy_contract(const uint8_t *code, size_t code_size,
   IM3Module module = NULL;
   M3Result result = m3_ParseModule(wasm_state.env, &module, code, code_size);
   if (!module || result) {
-    printf("Parse error: %s\n", result);
+    MXD_LOG_ERROR("contracts", "Parse error: %s", result);
     return -1;
   }
 
   // Load module into runtime
   result = m3_LoadModule(wasm_state.runtime, module);
   if (result) {
-    printf("Load error: %s\n", result);
+    MXD_LOG_ERROR("contracts", "Load error: %s", result);
     m3_FreeModule(module);
     return -1;
   }
@@ -115,7 +116,7 @@ int mxd_execute_contract(const mxd_contract_state_t *state,
   IM3Function func;
   M3Result res = m3_FindFunction(&func, wasm_state.runtime, "main");
   if (res) {
-    printf("Find function error: %s\n", res);
+    MXD_LOG_ERROR("contracts", "Find function error: %s", res);
     return -1;
   }
 
@@ -126,7 +127,7 @@ int mxd_execute_contract(const mxd_contract_state_t *state,
   uint32_t input_val = *(const uint32_t *)input;
   res = m3_CallV(func, input_val);
   if (res) {
-    printf("Call error: %s\n", res);
+    MXD_LOG_ERROR("contracts", "Call error: %s", res);
     return -1;
   }
 
@@ -134,7 +135,7 @@ int mxd_execute_contract(const mxd_contract_state_t *state,
   uint32_t ret = 0;
   res = m3_GetResultsV(func, &ret);
   if (res) {
-    printf("Get results error: %s\n", res);
+    MXD_LOG_ERROR("contracts", "Get results error: %s", res);
     return -1;
   }
 

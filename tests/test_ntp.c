@@ -5,6 +5,7 @@
 #include <string.h>
 #include <assert.h>
 #include <time.h>
+#include <unistd.h>
 
 // Test NTP initialization
 static void test_ntp_init(void) {

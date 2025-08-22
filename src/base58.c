@@ -1,7 +1,7 @@
+#include "mxd_logging.h"
 #include "base58.h"
 #include <gmp.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -14,12 +14,7 @@ int base58_encode(const uint8_t *data, size_t data_len, char *output,
     return -1;
   }
 
-  // Debug output
-  printf("Input data (%zu bytes):\n", data_len);
-  for (size_t i = 0; i < data_len; i++) {
-    printf("%02x ", data[i]);
-  }
-  printf("\n");
+  MXD_LOG_DEBUG("address", "Base58 encoding input length: %zu", data_len);
 
   // Handle MXD address prefix
   char *out_ptr = output;
@@ -102,8 +97,7 @@ int base58_encode(const uint8_t *data, size_t data_len, char *output,
   }
   out_ptr[output_len] = '\0';
 
-  // Debug output
-  printf("Output string: %s\n", output);
+  MXD_LOG_DEBUG("address", "Base58 encoding produced output");
 
   // Cleanup
   free(reversed_output);

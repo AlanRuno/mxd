@@ -1,0 +1,115 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "MXD Node Dashboard",
+    "tags": ["mxd", "blockchain"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Transactions Per Second",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "mxd_tps_current",
+            "legendFormat": "TPS"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 10},
+                {"color": "green", "value": 50}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Network Latency",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "mxd_network_latency_ms",
+            "legendFormat": "Latency (ms)"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms",
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 1000},
+                {"color": "red", "value": 3000}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Active Peers",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "mxd_peers_active",
+            "legendFormat": "Active Peers"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "Blockchain Height",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "mxd_blockchain_height",
+            "legendFormat": "Height"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+      },
+      {
+        "id": 5,
+        "title": "Consensus Efficiency",
+        "type": "gauge",
+        "targets": [
+          {
+            "expr": "mxd_consensus_efficiency",
+            "legendFormat": "Efficiency"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit",
+            "min": 0,
+            "max": 1,
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "yellow", "value": 0.8},
+                {"color": "green", "value": 0.95}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "5s"
+  }
+}

@@ -1,0 +1,17 @@
+build/
+build_*/
+*.o
+*.so
+*.a
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+.git/
+.gitignore
+*.log
+test.wasm
+test.wat
+wasm_binary.h
+wasm3/

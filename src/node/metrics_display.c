@@ -1,15 +1,15 @@
-#include <stdio.h>
+#include "../include/mxd_logging.h"
 #include <time.h>
 #include <string.h>
 #include "metrics_display.h"
 
 void clear_console(void) {
-    printf("\033[2J\033[H");  // ANSI escape codes to clear screen and move cursor to top
+    MXD_LOG_DEBUG("metrics_display", "Clear console");
 }
 
 void display_node_metrics(const mxd_node_metrics_t* metrics, const mxd_node_stake_t* stake) {
     if (!metrics || !stake) {
-        printf("Error: Invalid metrics or stake data\n");
+        MXD_LOG_ERROR("metrics_display", "Invalid metrics or stake data");
         return;
     }
 
@@ -26,43 +26,41 @@ void display_node_metrics(const mxd_node_metrics_t* metrics, const mxd_node_stak
     // Update network status based on metrics
     int is_active = metrics->reliability_score > 0.95 && tps >= 10.0;
     
-    // Debug metrics
-    printf("Debug: Display - TPS=%.2f, Success=%u/%u, Reliability=%.2f, Active=%d\n", 
-           tps, metrics->message_success, metrics->message_total,
-           metrics->reliability_score, is_active);
+    MXD_LOG_DEBUG("metrics_display", "TPS=%.2f, Success=%u/%u, Reliability=%.2f, Active=%d", 
+                  tps, metrics->message_success, metrics->message_total,
+                  metrics->reliability_score, is_active);
     
     // Header
-    printf("=== MXD Node Status === %s\n", time_str);
-    printf("Node ID: %s\n", stake->node_id);
-    printf("Stake Amount: %.2f MXD\n", stake->stake_amount);
+    MXD_LOG_INFO("metrics_display", "=== MXD Node Status === %s", time_str);
+    MXD_LOG_INFO("metrics_display", "Node ID: %s", stake->node_id);
+    MXD_LOG_INFO("metrics_display", "Stake Amount: %.2f MXD", stake->stake_amount);
     
     // Performance metrics
-    printf("\n=== Performance ===\n");
-    printf("Response Time: %lu ms (min: %lu, max: %lu)\n",
+    MXD_LOG_INFO("metrics_display", "=== Performance ===");
+    MXD_LOG_INFO("metrics_display", "Response Time: %lu ms (min: %lu, max: %lu)",
            metrics->avg_response_time,
            metrics->min_response_time,
            metrics->max_response_time);
-    printf("TPS: %.2f (target: ≥10.0)\n", tps);
-    printf("Messages: %u total\n", metrics->message_total);
-    printf("Reliability: %.2f%%\n", metrics->reliability_score * 100.0);
-    printf("Performance Score: %.2f\n", metrics->performance_score);
+    MXD_LOG_INFO("metrics_display", "TPS: %.2f (target: \xE2\x89\xA5 10.0)", tps);
+    MXD_LOG_INFO("metrics_display", "Messages: %u total", metrics->message_total);
+    MXD_LOG_INFO("metrics_display", "Reliability: %.2f%%", metrics->reliability_score * 100.0);
+    MXD_LOG_INFO("metrics_display", "Performance Score: %.2f", metrics->performance_score);
     
     // Network status
-    printf("\n=== Network Position ===\n");
-    printf("Connected Peers: %zu\n", metrics->peer_count);  // Move to top
-    printf("Rank: %d\n", stake->rank);
-    printf("Active: %s\n", is_active ? "Yes" : "No");
-    printf("Earnings (Tips): %.6f MXD\n", metrics->tip_share);
+    MXD_LOG_INFO("metrics_display", "=== Network Position ===");
+    MXD_LOG_INFO("metrics_display", "Connected Peers: %zu", metrics->peer_count);
+    MXD_LOG_INFO("metrics_display", "Rank: %d", stake->rank);
+    MXD_LOG_INFO("metrics_display", "Active: %s", is_active ? "Yes" : "No");
+    MXD_LOG_INFO("metrics_display", "Earnings (Tips): %.6f MXD", metrics->tip_share);
     
     // Performance indicators
-    printf("\n=== Health Indicators ===\n");
-    printf("Response Time: %s\n", 
+    MXD_LOG_INFO("metrics_display", "=== Health Indicators ===");
+    MXD_LOG_INFO("metrics_display", "Response Time: %s", 
            metrics->avg_response_time < 3000 ? "✓ Good" : "✗ High");
-    printf("Transaction Rate: %s\n", 
+    MXD_LOG_INFO("metrics_display", "Transaction Rate: %s", 
            tps >= 10.0 ? "✓ Good" : "✗ Low");
-    printf("Network Status: %s\n",
+    MXD_LOG_INFO("metrics_display", "Network Status: %s",
            stake->active ? "✓ Connected" : "✗ Disconnected");
     
-    printf("\nPress Ctrl+C to exit\n");
-    fflush(stdout);
+    MXD_LOG_INFO("metrics_display", "Press Ctrl+C to exit");
 }

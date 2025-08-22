@@ -6,6 +6,7 @@
 #include <cjson/cJSON.h>
 #include "mxd_config.h"
 #include "utils/mxd_http.h"
+#include "mxd_logging.h"
 
 static char* trim(char* str) {
     char* end;
@@ -77,14 +78,14 @@ int mxd_load_config(const char* config_file, mxd_config_t* config) {
     
     // If no config file specified, validate and use defaults
     if (config_file == NULL) {
-        printf("Using default configuration\n");
+        MXD_LOG_INFO("config", "Using default configuration");
         return mxd_validate_config(config);
     }
     
     // Try to open config file
     FILE* fp = fopen(config_file, "r");
     if (!fp) {
-        printf("Failed to open config file: %s, using default configuration\n", config_file);
+        MXD_LOG_WARN("config", "Failed to open config file: %s, using default configuration", config_file);
         return mxd_validate_config(config);
     }
     
@@ -97,8 +98,8 @@ int mxd_load_config(const char* config_file, mxd_config_t* config) {
             continue;
         }
         
-        if (sscanf(trimmed, "\"%[^\"]\" : \"%[^\"]\"", key, value) == 2 ||
-            sscanf(trimmed, "\"%[^\"]\":%[^,\n]", key, value) == 2) {
+        if (sscanf(trimmed, "\"%255[^\"]\" : \"%767[^\"]\"", key, value) == 2 ||
+            sscanf(trimmed, "\"%255[^\"]\":%767[^,\n]", key, value) == 2) {
             
             char* trimmed_value = trim(value);
             trimmed_value = strip_quotes(trimmed_value);
@@ -142,18 +143,17 @@ int mxd_load_config(const char* config_file, mxd_config_t* config) {
     
     // Validate final configuration
     if (mxd_validate_config(config) != 0) {
-        printf("Invalid configuration values, using defaults\n");
+        MXD_LOG_WARN("config", "Invalid configuration values, using defaults");
         mxd_set_default_config(config);
         return mxd_validate_config(config);
     }
     
-    printf("Loaded config: node_id=%s, port=%d, data_dir=%s, node_name=%s\n",
+    MXD_LOG_INFO("config", "Loaded config: node_id=%s, port=%d, data_dir=%s, node_name=%s",
            config->node_id, config->port, config->data_dir, config->node_name);
            
     // Fetch bootstrap nodes from network
     if (mxd_fetch_bootstrap_nodes(config) != 0) {
-        printf("Failed to fetch bootstrap nodes, using default configuration\n");
-        mxd_set_default_config(config);
+        MXD_LOG_WARN("config", "Failed to fetch bootstrap nodes, keeping existing bootstrap configuration");
         return mxd_validate_config(config);
     }
     
@@ -163,27 +163,26 @@ int mxd_load_config(const char* config_file, mxd_config_t* config) {
 int mxd_fetch_bootstrap_nodes(mxd_config_t* config) {
     if (!config) return -1;
     
-    printf("Fetching bootstrap nodes from https://mxd.network/bootstrap\n");
+    MXD_LOG_INFO("config", "Fetching bootstrap nodes from https://mxd.network/bootstrap");
 
     mxd_http_response_t* response = mxd_http_get("https://mxd.network/bootstrap");
     if (!response || response->status_code != 200) {
         // Fall back to hardcoded nodes
-        printf("Failed to fetch bootstrap nodes, using fallback nodes\n");
+        MXD_LOG_WARN("config", "Failed to fetch bootstrap nodes, using fallback nodes");
         mxd_http_free_response(response);
         return 0;
     }
     
     cJSON* root = cJSON_Parse(response->data);
     if (!root) {
-        printf("Failed to parse bootstrap nodes JSON (error: %s), using fallback nodes\n",
-           cJSON_GetErrorPtr() ? cJSON_GetErrorPtr() : "unknown");
+        MXD_LOG_WARN("config", "Failed to parse bootstrap nodes JSON, using fallback nodes");
         mxd_http_free_response(response);
         return 0;
     }
     
     cJSON* nodes = cJSON_GetObjectItem(root, "bootstrap_nodes");
     if (!nodes || !cJSON_IsArray(nodes)) {
-        printf("Invalid bootstrap nodes format, using fallback nodes\n");
+        MXD_LOG_WARN("config", "Invalid bootstrap nodes format, using fallback nodes");
         cJSON_Delete(root);
         mxd_http_free_response(response);
         return 0;
@@ -213,12 +212,14 @@ int mxd_fetch_bootstrap_nodes(mxd_config_t* config) {
         }
     }
     
-    // If no valid nodes found, keep fallback nodes
+    // If no valid nodes found, set fallback bootstrap nodes only
     if (config->bootstrap_count == 0) {
-        printf("No valid bootstrap nodes found, using fallback nodes\n");
-        mxd_set_default_config(config);
+        MXD_LOG_WARN("config", "No valid bootstrap nodes found, setting fallback bootstrap nodes");
+        config->bootstrap_count = 2;
+        strncpy(config->bootstrap_nodes[0], "127.0.0.1:8001", sizeof(config->bootstrap_nodes[0]) - 1);
+        strncpy(config->bootstrap_nodes[1], "127.0.0.1:8002", sizeof(config->bootstrap_nodes[1]) - 1);
     } else {
-        printf("Loaded %d bootstrap nodes from network\n", config->bootstrap_count);
+        MXD_LOG_INFO("config", "Loaded %d bootstrap nodes from network", config->bootstrap_count);
     }
     
     cJSON_Delete(root);

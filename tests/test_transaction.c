@@ -90,6 +90,18 @@ static void test_transaction_validation(void) {
   // Generate keypair
   assert(mxd_dilithium_keygen(pub_key, priv_key) == 0);
 
+  // Create a test UTXO for validation
+  mxd_utxo_t test_utxo = {0};
+  memcpy(test_utxo.tx_hash, prev_hash, 64);
+  test_utxo.output_index = 0;
+  memcpy(test_utxo.owner_key, pub_key, 256);
+  test_utxo.amount = 2.0; // More than enough for our test transaction
+  
+  // Calculate pubkey hash
+  assert(mxd_hash160(pub_key, 256, test_utxo.pubkey_hash) == 0);
+  
+  assert(mxd_add_utxo(&test_utxo) == 0);
+
   // Create valid transaction
   assert(mxd_create_transaction(&tx) == 0);
   assert(mxd_add_tx_input(&tx, prev_hash, 0, pub_key) == 0);
@@ -105,6 +117,7 @@ static void test_transaction_validation(void) {
   tx.version = 0;
   assert(mxd_validate_transaction(&tx) == -1);
 
+  assert(mxd_remove_utxo(prev_hash, 0) == 0);
   mxd_free_transaction(&tx);
   printf("Transaction validation test passed\n");
 }
@@ -141,12 +154,17 @@ int main(void) {
 
   // Initialize transaction validation system
   assert(mxd_init_transaction_validation() == 0);
+  
+  // Initialize UTXO database with a path
+  assert(mxd_init_utxo_db("./transaction_test_utxo.db") == 0);
 
   test_transaction_creation();
   test_input_output_management();
   test_transaction_signing();
   test_transaction_validation();
   test_transaction_hashing();
+
+  mxd_close_utxo_db();
 
   printf("All transaction tests passed\n");
   return 0;

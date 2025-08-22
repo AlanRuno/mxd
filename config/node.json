@@ -9,5 +9,6 @@
     "bootstrap_nodes": [
         "127.0.0.1:8001",
         "127.0.0.1:8002"
-    ]
+    ],
+    "_comment": "Development config uses localhost. Production uses node1.mxd.network:8000, node2.mxd.network:8000"
 }

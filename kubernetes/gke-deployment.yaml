@@ -1,0 +1,325 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mxd-enterprise-gke
+  labels:
+    app: mxd-enterprise
+    environment: production
+    platform: gke
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: mxd-enterprise
+  template:
+    metadata:
+      labels:
+        app: mxd-enterprise
+        environment: production
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: cloud.google.com/gke-nodepool
+                operator: In
+                values:
+                - mxd-node-pool
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - mxd-enterprise
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: mxd-node
+        image: gcr.io/PROJECT_ID/mxdlib:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: p2p
+          protocol: TCP
+        - containerPort: 8080
+          name: metrics
+          protocol: TCP
+        env:
+        - name: MXD_NODE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: MXD_NETWORK_MAGIC
+          valueFrom:
+            secretKeyRef:
+              name: mxd-secrets
+              key: network-magic
+        - name: MXD_LOG_LEVEL
+          value: "INFO"
+        - name: MXD_METRICS_PORT
+          value: "8080"
+        - name: MXD_DATA_DIR
+          value: "/opt/mxd/data"
+        - name: GOOGLE_CLOUD_PROJECT
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+            ephemeral-storage: "10Gi"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+            ephemeral-storage: "20Gi"
+        volumeMounts:
+        - name: data
+          mountPath: /opt/mxd/data
+        - name: config
+          mountPath: /opt/mxd/config
+        - name: logs
+          mountPath: /opt/mxd/logs
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: mxd-data-gke
+      - name: config
+        configMap:
+          name: mxd-config-gke
+          defaultMode: 0644
+      - name: logs
+        emptyDir:
+          sizeLimit: 10Gi
+      terminationGracePeriodSeconds: 60
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mxd-service-internal
+  labels:
+    app: mxd-enterprise
+spec:
+  selector:
+    app: mxd-enterprise
+  ports:
+  - name: p2p
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mxd-service-external
+  labels:
+    app: mxd-enterprise
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+    cloud.google.com/backend-config: '{"default": "mxd-backend-config"}'
+spec:
+  selector:
+    app: mxd-enterprise
+  ports:
+  - name: p2p
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  type: LoadBalancer
+  loadBalancerSourceRanges:
+  - 0.0.0.0/0
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mxd-data-gke
+  labels:
+    app: mxd-enterprise
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: ssd-retain
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mxd-config-gke
+  labels:
+    app: mxd-enterprise
+data:
+  production.json: |
+    {
+      "node": {
+        "port": 8000,
+        "data_dir": "/opt/mxd/data",
+        "max_peers": 50,
+        "enable_upnp": false
+      },
+      "network": {
+        "type": "mainnet",
+        "bootstrap_nodes": [
+          "node1.mxd.network:8000",
+          "node2.mxd.network:8000",
+          "node3.mxd.network:8000"
+        ],
+        "network_magic": "0x4D584431"
+      },
+      "monitoring": {
+        "enabled": true,
+        "metrics_port": 8080,
+        "health_check_interval": 30,
+        "prometheus_enabled": true
+      },
+      "backup": {
+        "enabled": true,
+        "interval_hours": 6,
+        "retention_days": 30,
+        "gcs_bucket": "mxd-backups-BUCKET_NAME"
+      },
+      "logging": {
+        "level": "INFO",
+        "structured": true,
+        "output": "stdout"
+      },
+      "performance": {
+        "worker_threads": 4,
+        "io_threads": 2,
+        "cache_size_mb": 512
+      }
+    }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mxd-secrets
+  labels:
+    app: mxd-enterprise
+type: Opaque
+data:
+  network-magic: NE1YRDQ0MzE=  # Base64 encoded "0x4D584431"
+  crypto-salt: dGVzdF9zYWx0X3ZhbHVl  # Base64 encoded "test_salt_value"
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: mxd-backend-config
+spec:
+  healthCheck:
+    checkIntervalSec: 30
+    timeoutSec: 10
+    healthyThreshold: 1
+    unhealthyThreshold: 3
+    type: HTTP
+    requestPath: /health
+    port: 8080
+  connectionDraining:
+    drainingTimeoutSec: 60
+  sessionAffinity:
+    affinityType: "CLIENT_IP"
+  timeoutSec: 30
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: mxd-ssl-cert
+spec:
+  domains:
+    - mxd.yourdomain.com
+    - api.mxd.yourdomain.com
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mxd-ingress
+  annotations:
+    kubernetes.io/ingress.global-static-ip-name: mxd-ip
+    networking.gke.io/managed-certificates: mxd-ssl-cert
+    kubernetes.io/ingress.class: "gce"
+    cloud.google.com/backend-config: '{"default": "mxd-backend-config"}'
+spec:
+  rules:
+  - host: mxd.yourdomain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: mxd-service-external
+            port:
+              number: 8000
+  - host: api.mxd.yourdomain.com
+    http:
+      paths:
+      - path: /metrics
+        pathType: Prefix
+        backend:
+          service:
+            name: mxd-service-external
+            port:
+              number: 8080
+      - path: /health
+        pathType: Prefix
+        backend:
+          service:
+            name: mxd-service-external
+            port:
+              number: 8080

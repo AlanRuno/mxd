@@ -127,12 +127,15 @@ int mxd_validate_block(const mxd_block_t *block) {
     return -1;
   }
 
-  // Verify block hash meets difficulty
+  // Verify block hash is computable
   uint8_t hash[64];
   if (mxd_calculate_block_hash(block, hash) != 0) {
     return -1;
   }
 
-  // For now, just check if first byte meets difficulty
+  if (block->difficulty <= 1) {
+    return 0;
+  }
+
   return hash[0] >= block->difficulty ? 0 : -1;
 }

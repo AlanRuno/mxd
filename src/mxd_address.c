@@ -1,10 +1,11 @@
 #include "../include/mxd_address.h"
 #include "../include/mxd_crypto.h"
+#include "../include/mxd_secrets.h"
+#include "../include/mxd_logging.h"
 #include "base58.h"
 #include <sodium.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -83,9 +84,13 @@ int mxd_generate_keypair(const uint8_t property_key[64],
   }
 
   // First derive the private key using Argon2
-  static const uint8_t DERIVATION_SALT[16] = "MXDKeyDerivation";
-  if (mxd_argon2((const char *)property_key, DERIVATION_SALT, private_key,
-                 128) != 0) {
+  const mxd_secrets_t *secrets = mxd_get_secrets();
+  if (!secrets) {
+    return -1;
+  }
+  uint8_t salt16[16] = {0};
+  memcpy(salt16, secrets->crypto_salt, sizeof(salt16));
+  if (mxd_argon2((const char *)property_key, salt16, private_key, 128) != 0) {
     return -1;
   }
 
@@ -120,61 +125,45 @@ int mxd_generate_address(const uint8_t public_key[256], char *address,
     address[1] = 'x';
     memset(address + 2, is_zero ? '1' : 'f', 39);
     address[41] = '\0';
-    printf("Generated special case address: %s (length: %zu)\n", address, strlen(address));
+    MXD_LOG_INFO("address", "Generated special case address");
     return 0;
   }
 
   // Debug output for public key
-  printf("Public key (%zu bytes):\n", (size_t)256);
-  for (size_t i = 0; i < 256; i++) {
-    printf("%02x ", public_key[i]);
-  }
-  printf("\n");
+  MXD_LOG_DEBUG("address", "Processing public key");
 
   // First hash: SHA-512 on public key
   uint8_t hash_buffer[64] = {0};
   uint8_t temp_buffer[64] = {0};
 
   if (mxd_sha512(public_key, 256, hash_buffer) != 0) {
-    printf("First SHA-512 failed\n");
+    MXD_LOG_ERROR("address", "First SHA-512 failed");
     return -1;
   }
 
   // Debug output for first hash
-  printf("First SHA-512 (%zu bytes):\n", (size_t)64);
-  for (size_t i = 0; i < 64; i++) {
-    printf("%02x ", hash_buffer[i]);
-  }
-  printf("\n");
+  MXD_LOG_DEBUG("address", "Computed first SHA-512");
 
   // Second hash: SHA-512 on first hash output
   memcpy(temp_buffer, hash_buffer, 64);
   memset(hash_buffer, 0, 64);
   if (mxd_sha512(temp_buffer, 64, hash_buffer) != 0) {
-    printf("Second SHA-512 failed\n");
+    MXD_LOG_ERROR("address", "Second SHA-512 failed");
     return -1;
   }
 
   // Debug output for second hash
-  printf("Second SHA-512 (%zu bytes):\n", (size_t)64);
-  for (size_t i = 0; i < 64; i++) {
-    printf("%02x ", hash_buffer[i]);
-  }
-  printf("\n");
+  MXD_LOG_DEBUG("address", "Computed second SHA-512");
 
   // RIPEMD-160 on the double SHA-512 output
   uint8_t ripemd_output[20] = {0};
   if (mxd_ripemd160(hash_buffer, 64, ripemd_output) != 0) {
-    printf("RIPEMD-160 failed\n");
+    MXD_LOG_ERROR("address", "RIPEMD-160 failed");
     return -1;
   }
 
   // Debug output for RIPEMD-160
-  printf("RIPEMD-160 (%zu bytes):\n", (size_t)20);
-  for (size_t i = 0; i < 20; i++) {
-    printf("%02x ", ripemd_output[i]);
-  }
-  printf("\n");
+  MXD_LOG_DEBUG("address", "Computed RIPEMD-160");
 
   // Prepare address bytes: Version(1) + RIPEMD160(20) + Checksum(4)
   uint8_t address_bytes[25] = {0};
@@ -184,7 +173,7 @@ int mxd_generate_address(const uint8_t public_key[256], char *address,
   // Calculate checksum (double SHA-512 of version + hash)
   memset(hash_buffer, 0, 64);
   if (mxd_sha512(address_bytes, 21, hash_buffer) != 0) {
-    printf("Checksum first SHA-512 failed\n");
+    MXD_LOG_ERROR("address", "Checksum first SHA-512 failed");
     return -1;
   }
 
@@ -192,7 +181,7 @@ int mxd_generate_address(const uint8_t public_key[256], char *address,
   memcpy(temp_buffer, hash_buffer, 64);
   memset(hash_buffer, 0, 64);
   if (mxd_sha512(temp_buffer, 64, hash_buffer) != 0) {
-    printf("Checksum second SHA-512 failed\n");
+    MXD_LOG_ERROR("address", "Checksum second SHA-512 failed");
     return -1;
   }
 
@@ -200,23 +189,19 @@ int mxd_generate_address(const uint8_t public_key[256], char *address,
   memcpy(address_bytes + 21, hash_buffer, 4);
 
   // Debug output for final address bytes
-  printf("Final address bytes (%zu bytes):\n", (size_t)25);
-  for (size_t i = 0; i < 25; i++) {
-    printf("%02x ", address_bytes[i]);
-  }
-  printf("\n");
+  MXD_LOG_DEBUG("address", "Prepared address bytes");
 
   // Debug output for address length
-  printf("Address buffer size: %zu\n", max_length);
+  MXD_LOG_DEBUG("address", "Checked address buffer size");
 
   // Encode in Base58Check
   int result = base58_encode(address_bytes, 25, address, max_length);
 
   // Debug output for result
   if (result == 0) {
-    printf("Generated address: %s (length: %zu)\n", address, strlen(address));
+    MXD_LOG_INFO("address", "Generated address");
   } else {
-    printf("Failed to generate address (result: %d)\n", result);
+    MXD_LOG_WARN("address", "Failed to generate address");
   }
 
   return result;

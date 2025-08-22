@@ -7,7 +7,7 @@
 
 static void test_utxo_initialization(void) {
   TEST_START("UTXO Initialization");
-  TEST_ASSERT(mxd_init_utxo_db() == 0, "Initialize UTXO database");
+  TEST_ASSERT(mxd_init_utxo_db("./test_utxo.db") == 0, "Initialize UTXO database");
   TEST_END("UTXO Initialization");
 }
 
@@ -28,6 +28,8 @@ static void test_utxo_management(void) {
   utxo.output_index = 0;
   memcpy(utxo.owner_key, owner_key, 256);
   utxo.amount = 1.0;
+  
+  TEST_ASSERT(mxd_hash160(owner_key, 256, utxo.pubkey_hash) == 0, "Calculate pubkey hash");
 
   // Add UTXO
   TEST_ASSERT(mxd_add_utxo(&utxo) == 0, "Add UTXO to database");
@@ -70,6 +72,8 @@ static void test_multisig_utxo(void) {
   utxo.output_index = 0;
   memcpy(utxo.owner_key, owner_key, 256);
   utxo.amount = 1.0;
+  
+  TEST_ASSERT(mxd_hash160(owner_key, 256, utxo.pubkey_hash) == 0, "Calculate pubkey hash");
 
   // Create multi-sig UTXO
   TEST_ASSERT(mxd_create_multisig_utxo(&utxo, cosigner_keys, 2, 2) == 0, "Multi-sig UTXO creation successful");
@@ -94,6 +98,8 @@ int main(void) {
   test_utxo_initialization();
   test_utxo_management();
   test_multisig_utxo();
+
+  mxd_close_utxo_db();
 
   TEST_END("UTXO Tests");
   return 0;

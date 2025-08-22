@@ -13,6 +13,7 @@
 - OpenSSL 3.0+
 - libsodium
 - GMP (GNU Multiple Precision Arithmetic Library)
+- RocksDB (for high-performance key-value storage)
 - wasm3
 - uvwasi and libuv
 
@@ -70,7 +71,7 @@ brew install \
 # Install core dependencies
 brew install \
     openssl \          # Cryptography
-    libsodium \        # Post-quantum crypto
+    libsodium \        # Ed25519 and post-quantum crypto
     gmp \              # Arbitrary precision math
     libuv              # Async I/O for WASM
 

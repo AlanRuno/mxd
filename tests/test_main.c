@@ -8,22 +8,22 @@
 
 void test_crypto() {
   printf("Testing cryptographic functions...\n");
-  // TODO: Implement crypto tests
+  // TODO: Implement crypto tests (test implementation incomplete)
 }
 
 void test_address() {
   printf("Testing address functions...\n");
-  // TODO: Implement address tests
+  // TODO: Implement address tests (test implementation incomplete)
 }
 
 void test_blockchain() {
   printf("Testing blockchain functions...\n");
-  // TODO: Implement blockchain tests
+  // TODO: Implement blockchain tests (test implementation incomplete)
 }
 
 void test_rsc() {
   printf("Testing RSC functions...\n");
-  // TODO: Implement RSC tests
+  // TODO: Implement RSC tests (test implementation incomplete)
 }
 
 int main() {

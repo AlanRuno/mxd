@@ -1,4 +1,7 @@
+#include "mxd_logging.h"
+
 #include <stdio.h>
+
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -8,6 +11,7 @@
 #include "mxd_dht.h"
 #include "mxd_config.h"
 #include "mxd_metrics.h"
+#include "mxd_logging.h"
 
 static mxd_node_metrics_t node_metrics = {
     .message_success = 0,
@@ -46,14 +50,12 @@ void mxd_init_bucket(mxd_bucket_t* bucket) {
 
 int mxd_init_node(const void* config) {
     if (!config) {
-        printf("Error: NULL config provided\n");
-        fflush(stdout);
+        MXD_LOG_ERROR("dht", "NULL config provided");
         return 1;
     }
     
     const mxd_config_t* cfg = (const mxd_config_t*)config;
-    printf("Initializing DHT node %s (port %d)\n", cfg->node_id, cfg->port);
-    fflush(stdout);
+    MXD_LOG_INFO("dht", "Initializing DHT node %s (port %d)", cfg->node_id, cfg->port);
     
     // Initialize random seed
     srand(time(NULL));
@@ -87,8 +89,8 @@ int mxd_init_node(const void* config) {
             // Extract host and port
             char host[256];
             int port;
-            if (sscanf(bootstrap_addr, "%[^:]:%d", host, &port) == 2) {
-                printf("Connecting to bootstrap node %s:%d\n", host, port);
+            if (sscanf(bootstrap_addr, "%255[^:]:%d", host, &port) == 2) {
+                MXD_LOG_INFO("dht", "Connecting to bootstrap node %s:%d", host, port);
                 // Simulate successful connection for now
                 gettimeofday(&last_ping_time, NULL);
             }
@@ -100,24 +102,21 @@ int mxd_init_node(const void* config) {
 
 int mxd_init_dht(const uint8_t* public_key) {
     if (!dht_initialized) {
-        printf("Error: Node not initialized\n");
-        fflush(stdout);
+        MXD_LOG_ERROR("dht", "Node not initialized");
         return 1;
     }
-    printf("Initializing DHT with public key for node %s\n", node_id);
-    fflush(stdout);
+    MXD_LOG_INFO("dht", "Initializing DHT with public key for node %s", node_id);
     return 0;
 }
 
 int mxd_start_dht(uint16_t port) {
     if (!dht_initialized) {
-        printf("Error: DHT not initialized\n");
-        fflush(stdout);
+        MXD_LOG_ERROR("dht", "DHT not initialized");
         return 1;
     }
     
     dht_port = port;
-    printf("DHT service started on port %d for node %s\n", port, node_id);
+    MXD_LOG_INFO("dht", "DHT service started on port %d for node %s", port, node_id);
     
     // Initialize metrics based on node type
     if (is_bootstrap) {
@@ -126,14 +125,14 @@ int mxd_start_dht(uint16_t port) {
         messages_per_second = 15;  // Higher TPS for bootstrap
         reliability = 1.0;
         message_count = 15;
-        printf("Bootstrap node initialized with %d connected peers\n", connected_peers);
+        MXD_LOG_INFO("dht", "Bootstrap node initialized with %d connected peers", connected_peers);
     } else {
         // Regular nodes connect to bootstrap and maintain required performance
         connected_peers = 1;
         messages_per_second = 10;  // Meet minimum TPS requirement
         reliability = 0.95;
         message_count = 10;
-        printf("Regular node initialized with %d connected peers\n", connected_peers);
+        MXD_LOG_INFO("dht", "Regular node initialized with %d connected peers", connected_peers);
     }
     
     // Update initial metrics
@@ -153,7 +152,6 @@ int mxd_start_dht(uint16_t port) {
     node_metrics.performance_score = reliability;
     node_metrics.tip_share = 0.0;
     
-    fflush(stdout);
     return 0;
 }
 
@@ -162,8 +160,7 @@ int mxd_stop_dht(void) {
         return 0;
     }
     
-    printf("Stopping DHT service on port %d for node %s\n", dht_port, node_id);
-    fflush(stdout);
+    MXD_LOG_INFO("dht", "Stopping DHT service on port %d for node %s", dht_port, node_id);
     dht_initialized = 0;
     dht_port = 0;
     return 0;
@@ -182,8 +179,7 @@ int mxd_dht_enable_nat_traversal(void) {
         return 1;
     }
     nat_enabled = 1;
-    printf("NAT traversal enabled for node %s\n", node_id);
-    fflush(stdout);
+    MXD_LOG_INFO("dht", "NAT traversal enabled for node %s", node_id);
     return 0;
 }
 
@@ -192,8 +188,7 @@ int mxd_dht_disable_nat_traversal(void) {
         return 1;
     }
     nat_enabled = 0;
-    printf("NAT traversal disabled for node %s\n", node_id);
-    fflush(stdout);
+    MXD_LOG_INFO("dht", "NAT traversal disabled for node %s", node_id);
     return 0;
 }
 uint64_t mxd_get_network_latency(void) {
@@ -249,13 +244,13 @@ uint64_t mxd_get_network_latency(void) {
             // Update connected status
             connected_peers = 1;  // Always connected in simulation
             
-            printf("Debug: Metrics - TPS=%u, Total=%u, Reliability=%.2f\n",
+            MXD_LOG_DEBUG("dht", "Metrics TPS=%u Total=%u Reliability=%.2f",
                    messages_per_second, message_count, reliability);
             
-            printf("Debug: Updating metrics - TPS=%lu, Reliability=%.2f\n", 
+            MXD_LOG_DEBUG("dht", "Updating metrics TPS=%u Reliability=%.2f", 
                    messages_per_second, reliability);
             
-            printf("Debug: Messages=%u, TPS=%u, Reliability=%.2f, Time=%lu\n", 
+            MXD_LOG_DEBUG("dht", "Messages=%u TPS=%u Reliability=%.2f Time=%lu", 
                    message_count, messages_per_second, reliability, 
                    (current_time - last_message_time) / 1000);
         }

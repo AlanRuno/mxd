@@ -30,7 +30,7 @@ static void test_mining_validation(void) {
   uint32_t tx_count = 0;
 
   // Initialize UTXO database
-  TEST_ASSERT(mxd_init_utxo_db() == 0, "UTXO database initialization");
+  TEST_ASSERT(mxd_init_utxo_db("./mining_test_utxo.db") == 0, "UTXO database initialization");
 
   // Initialize nodes with stakes and metrics
   for (size_t i = 0; i < TEST_NODE_COUNT; i++) {
@@ -305,7 +305,9 @@ static void test_mining_validation(void) {
     mxd_free_transaction(&transactions[i]);
   }
   mxd_free_transaction(&genesis_tx);
-  mxd_init_utxo_db(); // Re-initialize to clean state
+  
+  mxd_close_utxo_db();
+  mxd_init_utxo_db("./mining_test_utxo.db"); // Re-initialize to clean state
 
   TEST_END("Mining and Validation Test");
 }

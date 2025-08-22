@@ -7,6 +7,9 @@ extern "C" {
 
 #include <stddef.h>
 #include <stdint.h>
+#include "mxd_blockchain.h"
+
+int mxd_should_relay_block(const mxd_block_t *block, int just_signed);
 
 // Maximum number of peers in the connection pool
 #define MXD_MAX_PEERS 256  // Aligned with mxd_dht.h
@@ -30,6 +33,8 @@ typedef struct {
   uint64_t last_seen;      // Last seen timestamp
   uint32_t latency;        // Connection latency in ms
   uint8_t public_key[256]; // Peer's public key
+  uint8_t in_rapid_table;  // Whether peer is in the Rapid Table
+  uint32_t rapid_table_position; // Position in the Rapid Table (0 = highest)
 } mxd_peer_t;
 
 // Message types
@@ -42,7 +47,12 @@ typedef enum {
   MXD_MSG_GET_BLOCKS = 5,
   MXD_MSG_BLOCKS = 6,
   MXD_MSG_GET_TRANSACTIONS = 7,
-  MXD_MSG_TRANSACTIONS = 8
+  MXD_MSG_TRANSACTIONS = 8,
+  MXD_MSG_BLOCK_VALIDATION = 9,     // Block validation chain message
+  MXD_MSG_VALIDATION_SIGNATURE = 10, // Single validation signature
+  MXD_MSG_GET_VALIDATION_CHAIN = 11, // Request validation chain for block
+  MXD_MSG_VALIDATION_CHAIN = 12,     // Complete validation chain response
+  MXD_MSG_RAPID_TABLE_UPDATE = 13    // Rapid Table update message
 } mxd_message_type_t;
 
 // Message header
@@ -82,6 +92,40 @@ int mxd_send_message(const char *address, uint16_t port,
 // Broadcast message to all peers
 int mxd_broadcast_message(mxd_message_type_t type, const void *payload,
                           size_t payload_length);
+
+// Broadcast message to Rapid Table peers only (priority propagation)
+int mxd_broadcast_to_rapid_table(mxd_message_type_t type, const void *payload,
+                                size_t payload_length);
+
+// Broadcast block with validation chain to peers
+int mxd_broadcast_block_with_validation(const void *block_data, size_t block_length,
+                                       const void *validation_chain, size_t validation_length);
+
+// Relay block based on validation signature count (X=3)
+int mxd_relay_block_by_validation_count(const void *block_data, size_t block_length,
+                                       uint32_t signature_count);
+
+// Send validation signature to next validator in chain
+int mxd_send_validation_signature(const char *address, uint16_t port,
+                                 const uint8_t *block_hash, const uint8_t *signature,
+                                 uint16_t signature_length, uint32_t chain_position);
+
+// Request validation chain for block
+int mxd_request_validation_chain(const char *address, uint16_t port,
+                                const uint8_t *block_hash);
+
+// Update peer's Rapid Table status
+int mxd_update_peer_rapid_table_status(const char *address, uint16_t port,
+                                      uint8_t in_rapid_table, uint32_t position);
+
+// Get peers from Rapid Table only
+int mxd_get_rapid_table_peers(mxd_peer_t *peers, size_t *peer_count);
+
+// Set minimum number of signatures required for block relay
+int mxd_set_min_relay_signatures(uint32_t threshold);
+
+// Get minimum number of signatures required for block relay
+uint32_t mxd_get_min_relay_signatures(void);
 
 // Set message handler callback
 typedef void (*mxd_message_handler_t)(const char *address, uint16_t port,

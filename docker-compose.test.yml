@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  mxd-node-1:
+    build: .
+    container_name: mxd-node-1
+    ports:
+      - "8000:8000"
+      - "8080:8080"
+    environment:
+      - MXD_NODE_ID=node1
+      - MXD_NETWORK_MAGIC=0x4D584431
+      - MXD_LOG_LEVEL=INFO
+    volumes:
+      - mxd-data-1:/opt/mxd/data
+      - mxd-logs-1:/opt/mxd/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  mxd-node-2:
+    build: .
+    container_name: mxd-node-2
+    ports:
+      - "8001:8000"
+      - "8081:8080"
+    environment:
+      - MXD_NODE_ID=node2
+      - MXD_NETWORK_MAGIC=0x4D584431
+      - MXD_LOG_LEVEL=INFO
+    volumes:
+      - mxd-data-2:/opt/mxd/data
+      - mxd-logs-2:/opt/mxd/logs
+    depends_on:
+      - mxd-node-1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: mxd-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: mxd-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+
+volumes:
+  mxd-data-1:
+  mxd-data-2:
+  mxd-logs-1:
+  mxd-logs-2:
+  prometheus-data:
+  grafana-data:

@@ -1,0 +1,144 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mxd-enterprise
+  labels:
+    app: mxd-enterprise
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mxd-enterprise
+  template:
+    metadata:
+      labels:
+        app: mxd-enterprise
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+      - name: mxd-node
+        image: mxdlib:enterprise
+        ports:
+        - containerPort: 8000
+          name: p2p
+        - containerPort: 8080
+          name: metrics
+        env:
+        - name: MXD_NODE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: MXD_NETWORK_MAGIC
+          valueFrom:
+            secretKeyRef:
+              name: mxd-secrets
+              key: network-magic
+        - name: MXD_LOG_LEVEL
+          value: "INFO"
+        - name: MXD_METRICS_PORT
+          value: "8080"
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1"
+          limits:
+            memory: "4Gi"
+            cpu: "2"
+        volumeMounts:
+        - name: data
+          mountPath: /opt/mxd/data
+        - name: config
+          mountPath: /opt/mxd/config
+        - name: logs
+          mountPath: /opt/mxd/logs
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: mxd-data
+      - name: config
+        configMap:
+          name: mxd-config
+      - name: logs
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mxd-service
+spec:
+  selector:
+    app: mxd-enterprise
+  ports:
+  - name: p2p
+    port: 8000
+    targetPort: 8000
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mxd-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: fast-ssd
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mxd-config
+data:
+  production.json: |
+    {
+      "node": {
+        "port": 8000,
+        "data_dir": "/opt/mxd/data"
+      },
+      "network": {
+        "type": "mainnet",
+        "bootstrap_nodes": [
+          "node1.mxd.network:8000",
+          "node2.mxd.network:8000"
+        ]
+      },
+      "monitoring": {
+        "enabled": true,
+        "metrics_port": 8080,
+        "health_check_interval": 30
+      },
+      "backup": {
+        "enabled": true,
+        "interval_hours": 6,
+        "retention_days": 30
+      }
+    }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mxd-secrets
+type: Opaque
+data:
+  network-magic: NE1YRDQ0MzE=  # Base64 encoded "0x4D584431"
+  crypto-salt: dGVzdF9zYWx0X3ZhbHVl  # Base64 encoded "test_salt_value"

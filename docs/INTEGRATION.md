@@ -16,6 +16,9 @@ find_package(MXD REQUIRED)
 target_link_libraries(your_project PRIVATE mxd_shared)
 ```
 
+Note:
+- mxd_dilithium_* APIs are stable.
+- Default builds use Ed25519; when built with -DMXD_PQC_DILITHIUM=ON they use Crystals Dilithium (both implementations available).
 ## Basic Usage Examples
 
 ### Cryptographic Operations
@@ -54,11 +57,15 @@ void address_example() {
 }
 ```
 
-### Transaction Creation
+### Transaction Creation with UTXO Verification
 ```c
 #include <mxd_transaction.h>
+#include <mxd_utxo.h>
 
 void transaction_example() {
+    // Initialize UTXO database with RocksDB
+    mxd_init_utxo_db("./utxo.db");
+    
     // Create transaction
     mxd_transaction_t tx;
     mxd_create_transaction(&tx);
@@ -69,9 +76,52 @@ void transaction_example() {
     mxd_add_tx_input(&tx, prev_hash, 0, public_key);
     mxd_add_tx_output(&tx, recipient, 1.0);
 
-    // Sign and validate
+    // Sign and validate with UTXO verification
     mxd_sign_tx_input(&tx, 0, private_key);
-    mxd_validate_transaction(&tx);
+    
+    // Verify transaction against UTXO database
+    if (mxd_validate_transaction(&tx) == 0) {
+        // Apply transaction to UTXO database
+        mxd_apply_transaction_to_utxo(&tx);
+    }
+    
+    // Close UTXO database when done
+    mxd_close_utxo_db();
+}
+```
+
+### Validation Chain Protocol
+```c
+#include <mxd_blockchain.h>
+#include <mxd_rsc.h>
+
+void validation_chain_example() {
+    // Initialize blockchain with RocksDB
+    mxd_init_blockchain_db("./blockchain.db");
+    
+    // Create a new block with validation chain
+    mxd_block_t block;
+    mxd_create_block(&block);
+    
+    // Add validator signatures to validation chain
+    uint8_t validator_id[20] = {0};
+    uint8_t signature[256] = {0};
+    uint64_t timestamp = mxd_get_current_time_ms();
+    
+    // Add first validator signature
+    mxd_add_validator_signature(&block, validator_id, timestamp, signature);
+    
+    // Verify validation chain
+    if (mxd_verify_validation_chain(&block) == 0) {
+        // Calculate cumulative latency score for fork resolution
+        double score = mxd_calculate_latency_score(&block);
+        
+        // Add block to blockchain
+        mxd_add_block_to_chain(&block);
+    }
+    
+    // Close blockchain database when done
+    mxd_close_blockchain_db();
 }
 ```
 

@@ -1,4 +1,5 @@
 #include "../include/mxd_checkpoints.h"
+#include "../include/mxd_crypto.h"
 #include "test_utils.h"
 #include <assert.h>
 #include <stdio.h>

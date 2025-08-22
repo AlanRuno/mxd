@@ -293,3 +293,18 @@ target_link_libraries(mxd_integration_test
 
 add_test(NAME integration_tests COMMAND mxd_integration_test)
 set_tests_properties(integration_tests PROPERTIES TIMEOUT 120)
+
+# Validation Chain Network test
+add_executable(mxd_validation_chain_test
+    test_validation_chain.c
+)
+
+target_link_libraries(mxd_validation_chain_test
+    mxd
+    ${OPENSSL_LIBRARIES}
+    sodium
+    pthread
+)
+
+add_test(NAME validation_chain_tests COMMAND mxd_validation_chain_test)
+set_tests_properties(validation_chain_tests PROPERTIES TIMEOUT 120)

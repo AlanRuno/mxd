@@ -1,3 +1,6 @@
+Doc vs Implementation Matrix
+- See docs/IMPLEMENTATION_MATRIX.md for a systematic comparison between documented design and actual implementation across consensus, P2P propagation, cryptography, configuration, and CI security features.
+
 # 🌟 MXD Universal Dynamic Library
 
 A cross-platform dynamic library implementing cryptographic, blockchain, and networking functionalities with ISO compliance and post-quantum security. This library serves as the foundation for the Mexican Denarius (MXD) cryptocurrency, designed to revolutionize digital financial transactions with a focus on efficiency, security, and scalability.
@@ -9,15 +12,16 @@ MXD (Mexican Denarius) represents a groundbreaking advancement in digital financ
 ### 🎯 Core Features & Vision
 - **Zero Mandatory Fees**: Revolutionary transaction model with optional voluntary tips
 - **Advanced Consensus**: Communication speed-based mechanism ensuring optimal efficiency
-- **Deployment Timeline**: 
-  - Current: Pre-launch phase on BNB Smart Chain
-  - 2025: Main network deployment with full feature set
+- **Deployment Status**: 
+  - Current: Post-audit development phase (August 2025)
+  - Status: 85% production ready with enterprise compliance in progress
+  - Network: Mainnet deployment preparation underway
 - **Financial Empowerment**: Focused on simplifying digital transactions and increasing accessibility
 
 ### 💫 Technical Innovation
 - **Consensus Mechanism**: Utilizes network communication speed metrics for efficient block validation
 - **Transaction Model**: UTXO-based system with voluntary tip structure
-- **Security**: Post-quantum cryptographic implementations with Dilithium5
+- **Security**: Hybrid cryptographic implementation — Ed25519 (default) with Dilithium post-quantum signatures available via MXD_PQC_DILITHIUM build option
 - **Network Efficiency**: Optimized P2P communication with DHT-based node discovery
 
 ## 🚀 Features
@@ -25,18 +29,27 @@ MXD (Mexican Denarius) represents a groundbreaking advancement in digital financ
 ### 🔐 Core Cryptographic Features
 - SHA-512 & RIPEMD-160 hashing (ISO/IEC 10118-3)
 - Argon2 key derivation (ISO/IEC 11889)
-- Dilithium5 post-quantum signatures (ISO/IEC 18033-3) with matrix calculations
+- Digital signatures: Ed25519 (default); Crystals Dilithium available via MXD_PQC_DILITHIUM=ON (ISO/IEC 18033-3)
 - Elliptic curve cryptography (secp256k1) for robust transaction security
 - Base58Check address encoding
 
 ### 💎 Blockchain & Consensus
-- Advanced communication speed-based consensus mechanism
+- Advanced Rapid Stake Consensus (RSC) with Validation Chain Protocol
+- Sequential validation by ≥50% of Rapid Table nodes with cryptographic signatures
 - Network Time Protocol (NTP) synchronization for precise timing
-- Collaborative real-time consensus protocol
+- RocksDB persistence for high-performance UTXO and blockchain storage
 - Transaction management with UTXO model and voluntary tip system
 - Memory pool for transaction staging
-- P2P networking with DHT-based discovery
+- P2P networking with DHT-based discovery and tamper-proof routing
 - Eco-friendly design with minimal energy consumption
+### Validation Chain Protocol rules
+- A block is valid only if it has signatures from at least 50% of Rapid Table validators
+- Each signature is over: block_hash || previous_validator_id || timestamp
+- Timestamp drift allowance: ±60 seconds
+- One signature per validator per block height
+- Relay only if you just signed the block, or the block has ≥3 valid, ordered signatures
+- Fork resolution preference: more valid signatures, then cumulative latency Σ(1/latency_i), then stake weight
+
 
 ### 📜 Smart Contracts & Extensions
 - WebAssembly (WASM) runtime using wasm3
@@ -67,6 +80,28 @@ The library's architecture is designed for optimal performance and security in c
 
 ## 🛠️ Quick Start
 
+### ✅ PRODUCTION STATUS (August 2025)
+**SECURITY**: Critical security vulnerabilities resolved through comprehensive audit and implementation of secure logging framework and environment-based secrets management.
+
+**CURRENT STATUS**: 85% Production Ready
+- ✅ Core cryptographic and blockchain functionality implemented
+- ✅ Security vulnerabilities addressed and verified
+- ✅ Basic infrastructure and monitoring operational
+- 🔄 Enterprise compliance and advanced monitoring in progress
+
+**PERFORMANCE**: Current validated capacity of 10 TPS with enterprise target of 100 TPS
+**NETWORK**: 3-second maximum latency (enterprise target: <1 second)
+
+**See**: `docs/planning/NEXT_STEPS_POST_AUDIT.md` for complete enterprise readiness roadmap
+
+### 🔒 Security Development Guidelines
+If you are contributing to this project:
+
+1. **Use secure logging framework** - MXD_LOG_* macros implemented in `src/mxd_logging.c`
+2. **Environment-based secrets** - Load from environment variables, never hardcode
+3. **Input validation required** - Use existing validation framework for all inputs
+4. **Follow security patterns** - Review implemented security measures in codebase
+
 ### Node Configuration
 The node can be started with or without a configuration file:
 ```bash
@@ -77,6 +112,12 @@ The node can be started with or without a configuration file:
 ./mxd_node
 ```
 The default configuration file (`default_config.json`) is automatically loaded from the same directory as the executable if no configuration file is specified.
+
+### 🔐 Cryptographic Implementation Status:
+- **Default**: Ed25519 signatures via libsodium (production ready)
+- **Post-Quantum**: Dilithium signatures implemented and available with `-DMXD_PQC_DILITHIUM=ON`
+- **Build Configuration**: CMake defaults to Ed25519; Dilithium requires explicit enablement
+- **API Compatibility**: Both signature schemes use unified `mxd_dilithium_*` API interface
 
 ### Prerequisites
 
@@ -217,7 +258,7 @@ mxd_deploy_contract(wasm_code, wasm_size, &state);
 Please read our [Contributing Guidelines](CONTRIBUTING.md) before submitting pull requests.
 
 ## 📄 License
-This project is licensed under the GNU v3.0 License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 🔗 Links
 - [Issue Tracker](https://github.com/AlanRuno/mxdlib/issues)

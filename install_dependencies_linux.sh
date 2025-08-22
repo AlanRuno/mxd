@@ -164,7 +164,7 @@ verify_system_deps() {
 
 install_system_deps() {
     sudo apt-get update
-    sudo apt-get install -y build-essential cmake pkg-config libssl-dev libsodium-dev libgmp-dev libc-bin libcjson-dev libcurl4-openssl-dev
+    sudo apt-get install -y build-essential cmake pkg-config libssl-dev libsodium-dev libgmp-dev libc-bin libcjson-dev libcurl4-openssl-dev librocksdb-dev
     
     # Run ldconfig if available
     if command -v ldconfig >/dev/null 2>&1; then

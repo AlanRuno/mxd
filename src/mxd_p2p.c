@@ -6,8 +6,8 @@
 #include "mxd_crypto.h"
 #include "mxd_dht.h"
 #include "mxd_p2p.h"
-
-#define MXD_NETWORK_MAGIC 0x4D584431 // "MXD1" in ASCII
+#include "mxd_logging.h"
+#include "mxd_secrets.h"
 
 static int p2p_initialized = 0;
 static uint16_t p2p_port = 0;
@@ -47,17 +47,32 @@ static int validate_message(const mxd_message_header_t *header, const void *payl
     }
 
     // Check magic number
-    if (header->magic != MXD_NETWORK_MAGIC) {
+    const mxd_secrets_t *secrets = mxd_get_secrets();
+    if (!secrets) {
+        MXD_LOG_ERROR("p2p", "Secrets not initialized");
+        return -1;
+    }
+    uint32_t expected_magic = secrets->network_magic;
+    if (header->magic != expected_magic) {
+        MXD_LOG_WARN("p2p", "Invalid network magic received");
         return -1;
     }
 
     // Check message size
     if (header->length > MXD_MAX_MESSAGE_SIZE) {
+        MXD_LOG_WARN("p2p", "Message size %zu exceeds maximum %d", header->length, MXD_MAX_MESSAGE_SIZE);
         return -1;
     }
     
     // Validate message type
-    if (header->type > MXD_MSG_TRANSACTIONS) {
+    if (header->type > MXD_MSG_RAPID_TABLE_UPDATE) {
+        MXD_LOG_WARN("p2p", "Invalid message type %d", header->type);
+        return -1;
+    }
+    
+    // Additional input validation
+    if (header->length == 0) {
+        MXD_LOG_WARN("p2p", "Empty message payload");
         return -1;
     }
 
@@ -162,16 +177,16 @@ int mxd_init_p2p(uint16_t port, const uint8_t* public_key) {
     snprintf(node_config.data_dir, sizeof(node_config.data_dir), "data");
     
     p2p_initialized = 1;
-    printf("P2P initialized on port %d\n", port);
+    MXD_LOG_INFO("p2p", "P2P initialized on port %d", port);
     return 0;
 }
 
 int mxd_start_p2p(void) {
     if (!p2p_initialized) {
-        printf("P2P not initialized\n");
+        MXD_LOG_ERROR("p2p", "P2P not initialized");
         return 1;
     }
-    printf("P2P started on port %d\n", p2p_port);
+    MXD_LOG_INFO("p2p", "P2P started on port %d", p2p_port);
     return 0;
 }
 
@@ -180,7 +195,7 @@ int mxd_stop_p2p(void) {
         return 0;
     }
     p2p_initialized = 0;
-    printf("P2P stopped\n");
+    MXD_LOG_INFO("p2p", "P2P stopped");
     return 0;
 }
 
@@ -188,7 +203,7 @@ int mxd_add_peer(const char* address, uint16_t port) {
     if (!p2p_initialized) {
         return 1;
     }
-    printf("Added peer %s:%d\n", address, port);
+    MXD_LOG_INFO("p2p", "Added peer %s:%d", address, port);
     return 0;
 }
 
@@ -234,7 +249,7 @@ int mxd_broadcast_message(mxd_message_type_t type, const void* payload, size_t p
     }
 
     // Size and type validation - these should always fail without counting as errors
-    if (payload_length > MXD_MAX_MESSAGE_SIZE || type > MXD_MSG_TRANSACTIONS) {
+    if (payload_length > MXD_MAX_MESSAGE_SIZE || type > MXD_MSG_RAPID_TABLE_UPDATE) {
         return -1;
     }
 
@@ -242,8 +257,15 @@ int mxd_broadcast_message(mxd_message_type_t type, const void* payload, size_t p
     consecutive_errors = 0;
 
     // Prepare message header
+    const mxd_secrets_t *secrets = mxd_get_secrets();
+    if (!secrets) {
+        MXD_LOG_ERROR("p2p", "Secrets not initialized");
+        return -1;
+    }
+    uint32_t network_magic = secrets->network_magic;
+    
     mxd_message_header_t header = {
-        .magic = MXD_NETWORK_MAGIC,
+        .magic = network_magic,
         .type = type,
         .length = payload_length
     };
@@ -265,27 +287,27 @@ int mxd_broadcast_message(mxd_message_type_t type, const void* payload, size_t p
 
 int mxd_start_peer_discovery(void) {
     if (!p2p_initialized) {
-        printf("Error: P2P not initialized\n");
+        MXD_LOG_ERROR("p2p", "P2P not initialized");
         return 1;
     }
     
     // Initialize DHT for peer discovery
     if (mxd_init_node(&node_config) != 0) {
-        printf("Error: Failed to initialize DHT node\n");
+        MXD_LOG_ERROR("p2p", "Failed to initialize DHT node");
         return 1;
     }
     
     if (mxd_start_dht(p2p_port) != 0) {
-        printf("Error: Failed to start DHT service\n");
+        MXD_LOG_ERROR("p2p", "Failed to start DHT service");
         return 1;
     }
     
-    printf("Peer discovery started\n");
+    MXD_LOG_INFO("p2p", "Peer discovery started");
     return 0;
 }
 
 int mxd_stop_peer_discovery(void) {
     mxd_stop_dht();
-    printf("Peer discovery stopped\n");
+    MXD_LOG_INFO("p2p", "Peer discovery stopped");
     return 0;
 }
