@@ -1,0 +1,280 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mxd-enterprise-gke-test
+  labels:
+    app: mxd-enterprise-test
+    environment: testing
+    platform: gke
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: mxd-enterprise-test
+  template:
+    metadata:
+      labels:
+        app: mxd-enterprise-test
+        environment: testing
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: mxd-node
+        image: gcr.io/PROJECT_ID/mxdlib:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: p2p
+          protocol: TCP
+        - containerPort: 8080
+          name: metrics
+          protocol: TCP
+        env:
+        - name: MXD_NODE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: MXD_NETWORK_MAGIC
+          valueFrom:
+            secretKeyRef:
+              name: mxd-secrets-test
+              key: network-magic
+        - name: MXD_LOG_LEVEL
+          value: "INFO"
+        - name: MXD_METRICS_PORT
+          value: "8080"
+        - name: MXD_DATA_DIR
+          value: "/opt/mxd/data"
+        - name: GOOGLE_CLOUD_PROJECT
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+            ephemeral-storage: "2Gi"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+            ephemeral-storage: "5Gi"
+        volumeMounts:
+        - name: data
+          mountPath: /opt/mxd/data
+        - name: config
+          mountPath: /opt/mxd/config
+        - name: logs
+          mountPath: /opt/mxd/logs
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 120
+          periodSeconds: 60
+          timeoutSeconds: 15
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 5
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 15
+          timeoutSeconds: 10
+          failureThreshold: 40
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: mxd-data-gke-test
+      - name: config
+        configMap:
+          name: mxd-config-gke-test
+          defaultMode: 0644
+      - name: logs
+        emptyDir:
+          sizeLimit: 2Gi
+      terminationGracePeriodSeconds: 60
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mxd-service-internal-test
+  labels:
+    app: mxd-enterprise-test
+spec:
+  selector:
+    app: mxd-enterprise-test
+  ports:
+  - name: p2p
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mxd-service-external-test
+  labels:
+    app: mxd-enterprise-test
+  annotations:
+    cloud.google.com/neg: '{"ingress": true}'
+    cloud.google.com/backend-config: '{"default": "mxd-backend-config-test"}'
+spec:
+  selector:
+    app: mxd-enterprise-test
+  ports:
+  - name: p2p
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  type: LoadBalancer
+  loadBalancerSourceRanges:
+  - 0.0.0.0/0
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mxd-data-gke-test
+  labels:
+    app: mxd-enterprise-test
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard-retain
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mxd-config-gke-test
+  labels:
+    app: mxd-enterprise-test
+data:
+  testing.json: |
+    {
+      "node": {
+        "port": 8000,
+        "data_dir": "/opt/mxd/data",
+        "max_peers": 10,
+        "enable_upnp": false
+      },
+      "network": {
+        "type": "testnet",
+        "bootstrap_nodes": [
+          "node1.mxd.network:8000"
+        ],
+        "network_magic": "0x4D584431"
+      },
+      "monitoring": {
+        "enabled": true,
+        "metrics_port": 8080,
+        "health_check_interval": 60,
+        "prometheus_enabled": true
+      },
+      "backup": {
+        "enabled": false,
+        "interval_hours": 24,
+        "retention_days": 3,
+        "gcs_bucket": "mxd-backups-BUCKET_NAME"
+      },
+      "logging": {
+        "level": "INFO",
+        "structured": true,
+        "output": "stdout"
+      },
+      "performance": {
+        "worker_threads": 1,
+        "io_threads": 1,
+        "cache_size_mb": 64
+      }
+    }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mxd-secrets-test
+  labels:
+    app: mxd-enterprise-test
+type: Opaque
+data:
+  network-magic: NE1YRDQ0MzE=  # Base64 encoded "0x4D584431"
+  crypto-salt: dGVzdF9zYWx0X3ZhbHVl  # Base64 encoded "test_salt_value"
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: mxd-backend-config-test
+spec:
+  healthCheck:
+    checkIntervalSec: 60
+    timeoutSec: 15
+    healthyThreshold: 1
+    unhealthyThreshold: 5
+    type: HTTP
+    requestPath: /health
+    port: 8080
+  connectionDraining:
+    drainingTimeoutSec: 60
+  sessionAffinity:
+    affinityType: "CLIENT_IP"
+  timeoutSec: 60
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mxd-hpa-test
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mxd-enterprise-gke-test
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 80
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 85

@@ -24,6 +24,14 @@ void handle_signal(int signum) {
 }
 
 int run_network_tests(const char* config_file) {
+    mxd_log_config_t log_config = {
+        .level = MXD_LOG_INFO,
+        .output_file = NULL,
+        .enable_console = 1,
+        .enable_json = 0
+    };
+    mxd_init_logging(&log_config);
+    
     MXD_LOG_INFO("dht", "Starting network tests with config: %s", config_file);
     
     // Set up signal handlers

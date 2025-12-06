@@ -315,13 +315,17 @@ static void test_mining_validation(void) {
 int main(void) {
   // Initialize test keys for P2P
   uint8_t test_pub_key[256] = {0};
+  uint8_t test_priv_key[128] = {0};
   for (int i = 0; i < 256; i++) {
     test_pub_key[i] = i % 256;
+  }
+  for (int i = 0; i < 128; i++) {
+    test_priv_key[i] = (i * 2) % 256;
   }
 
   // Initialize required systems
   TEST_ASSERT(mxd_init_ntp() == 0, "NTP initialization");
-  TEST_ASSERT(mxd_init_p2p(12345, test_pub_key) == 0, "P2P initialization");
+  TEST_ASSERT(mxd_init_p2p(12345, test_pub_key, test_priv_key) == 0, "P2P initialization");
   TEST_ASSERT(mxd_init_transaction_validation() == 0,
               "Transaction validation initialization");
 

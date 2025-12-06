@@ -12,6 +12,7 @@ typedef struct {
 
 // HTTP client functions
 mxd_http_response_t* mxd_http_get(const char* url);
+mxd_http_response_t* mxd_http_post(const char* url, const char* post_data, const char* auth_token);
 void mxd_http_free_response(mxd_http_response_t* response);
 
 #endif // MXD_HTTP_H

@@ -196,7 +196,7 @@ int mxd_hash160(const uint8_t *input, size_t length, uint8_t output[20]) {
   return mxd_ripemd160(sha256_output, 32, output);
 }
 
-// Argon2 key derivation implementation
+// Argon2 key derivation implementation (SENSITIVE: ~1GB memory)
 int mxd_argon2(const char *input, const uint8_t *salt, uint8_t *output,
                size_t output_length) {
   if (ensure_crypto_init() < 0) {
@@ -207,6 +207,27 @@ int mxd_argon2(const char *input, const uint8_t *salt, uint8_t *output,
   if (crypto_pwhash(output, output_length, input, strlen(input), salt,
                     crypto_pwhash_OPSLIMIT_SENSITIVE,
                     crypto_pwhash_MEMLIMIT_SENSITIVE,
+                    crypto_pwhash_ALG_ARGON2ID13) != 0) {
+    return -1;
+  }
+  return 0;
+}
+
+// Argon2 key derivation implementation (INTERACTIVE: ~64MB memory)
+int mxd_argon2_lowmem(const char *input, const uint8_t *salt, uint8_t *output,
+                      size_t output_length) {
+  if (ensure_crypto_init() < 0) {
+    return -1;
+  }
+
+  // Using Argon2id variant with INTERACTIVE memlimit (~64MB)
+  MXD_LOG_INFO("crypto", "Using Argon2 INTERACTIVE profile: memlimit=%zu MB, opslimit=%llu",
+               crypto_pwhash_MEMLIMIT_INTERACTIVE / (1024*1024),
+               (unsigned long long)crypto_pwhash_OPSLIMIT_INTERACTIVE);
+  
+  if (crypto_pwhash(output, output_length, input, strlen(input), salt,
+                    crypto_pwhash_OPSLIMIT_INTERACTIVE,
+                    crypto_pwhash_MEMLIMIT_INTERACTIVE,
                     crypto_pwhash_ALG_ARGON2ID13) != 0) {
     return -1;
   }

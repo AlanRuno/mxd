@@ -1,0 +1,92 @@
+#!/bin/bash
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Check if network type is provided
+if [ -z "$1" ]; then
+    echo "Usage: $0 [testnet|mainnet]"
+    echo ""
+    echo "Examples:"
+    echo "  $0 testnet   # Build and run node on testnet"
+    echo "  $0 mainnet   # Build and run node on mainnet"
+    exit 1
+fi
+
+NETWORK_TYPE=$1
+
+if [[ "$NETWORK_TYPE" != "testnet" ]] && [[ "$NETWORK_TYPE" != "mainnet" ]]; then
+    echo "Error: network type must be 'testnet' or 'mainnet'"
+    exit 1
+fi
+
+echo "═══════════════════════════════════════════"
+echo "  MXD Node Quick Start"
+echo "═══════════════════════════════════════════"
+echo ""
+
+echo "Step 1/5: Installing dependencies..."
+cd "$SCRIPT_DIR"
+./install_dependencies.sh
+
+echo ""
+echo "Step 2/5: Cleaning build directory..."
+rm -rf build
+
+echo ""
+echo "Step 3/5: Building project..."
+mkdir build
+cd build
+cmake ..
+make -j$(nproc)
+cd ..
+
+echo ""
+echo "Step 4/5: Configuring network ($NETWORK_TYPE)..."
+CONFIG_FILE="build/lib/default_config.json"
+./switch_network.sh "$CONFIG_FILE" "$NETWORK_TYPE"
+
+echo ""
+echo "Step 5/5: Starting node..."
+echo ""
+
+# Load environment variables if .env exists
+if [ -f .env ]; then
+    source .env
+fi
+
+# Run the node and capture exit status
+./build/lib/mxd_node "$CONFIG_FILE" "${@:2}"
+EXIT_STATUS=$?
+
+# Check for SIGKILL (exit code 137 = 128 + 9)
+if [ $EXIT_STATUS -eq 137 ]; then
+    echo ""
+    echo "═══════════════════════════════════════════"
+    echo "⚠️  WARNING: Process was killed (SIGKILL)"
+    echo "═══════════════════════════════════════════"
+    echo ""
+    echo "The node process was terminated by the system with SIGKILL."
+    echo "This typically indicates:"
+    echo "  • Out of Memory (OOM) killer"
+    echo "  • Container/cgroup memory limit exceeded"
+    echo "  • systemd-oomd intervention"
+    echo "  • Kubernetes pod eviction"
+    echo ""
+    echo "To diagnose:"
+    echo "  1. Check kernel logs: dmesg -T | tail -100 | grep -i 'oom\\|kill'"
+    echo "  2. Check memory limits: ulimit -a"
+    echo "  3. Check cgroup limits: cat /sys/fs/cgroup/memory.max"
+    echo "  4. If in Docker/K8s: Check pod/container status for OOMKilled"
+    echo "  5. Check systemd journal: journalctl -xe | grep -i 'oom\\|kill'"
+    echo ""
+    echo "Consider:"
+    echo "  • Increasing memory limits in your container/VM"
+    echo "  • Reducing RocksDB cache sizes in config"
+    echo "  • Disabling UPnP (set enable_upnp=false in config)"
+    echo ""
+    exit 137
+fi
+
+exit $EXIT_STATUS

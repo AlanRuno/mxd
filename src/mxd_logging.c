@@ -74,6 +74,7 @@ void mxd_log(mxd_log_level_t level, const char *component, const char *format, .
         
         if (current_config.enable_console) {
             printf("%s", json_log);
+            fflush(stdout);
         }
         if (log_file) {
             fprintf(log_file, "%s", json_log);
@@ -87,6 +88,7 @@ void mxd_log(mxd_log_level_t level, const char *component, const char *format, .
         
         if (current_config.enable_console) {
             printf("%s", formatted_log);
+            fflush(stdout);
         }
         if (log_file) {
             fprintf(log_file, "%s", formatted_log);

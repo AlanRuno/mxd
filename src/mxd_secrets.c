@@ -40,11 +40,8 @@ int mxd_init_secrets(const char *config_file) {
     }
     
     if (!have_magic) {
-        if (fill_random(&secrets.network_magic, sizeof(secrets.network_magic)) != 0) {
-            MXD_LOG_ERROR("secrets", "Failed to generate network magic");
-            return -1;
-        }
-        MXD_LOG_WARN("secrets", "Generated development-only network magic");
+        secrets.network_magic = 0xD3B7C4A1;
+        MXD_LOG_INFO("secrets", "Using default testnet network magic: 0xD3B7C4A1");
     }
     
     if (!have_salt) {

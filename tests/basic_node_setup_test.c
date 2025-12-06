@@ -35,7 +35,7 @@ static void test_node_setup(void) {
     
     // Initialize P2P with latency tracking
     uint64_t start_time = get_current_time_ms();
-    TEST_ASSERT(mxd_init_p2p(config.port, public_key) == 0, "P2P initialization");
+    TEST_ASSERT(mxd_init_p2p(config.port, public_key, private_key) == 0, "P2P initialization");
     TEST_ASSERT(mxd_start_p2p() == 0, "P2P startup");
     uint64_t end_time = get_current_time_ms();
     uint64_t latency = end_time - start_time;

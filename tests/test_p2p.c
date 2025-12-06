@@ -24,10 +24,14 @@ int test_p2p_networking(void) {
     printf("Test timeouts set to %d seconds\n", TEST_TIMEOUT);
     fflush(stdout);
 
-    // Generate test public key
-    uint8_t public_key[32] = {0};
-    for (int i = 0; i < 32; i++) {
-        public_key[i] = i;
+    // Generate test keypair (256-byte public key, 128-byte private key for Dilithium)
+    uint8_t public_key[256] = {0};
+    uint8_t private_key[128] = {0};
+    for (int i = 0; i < 256; i++) {
+        public_key[i] = i % 256;
+    }
+    for (int i = 0; i < 128; i++) {
+        private_key[i] = (i * 2) % 256;
     }
 
     // Initialize P2P networking
@@ -35,7 +39,7 @@ int test_p2p_networking(void) {
     TEST_VALUE("Port", "%d", 12345);
     TEST_ARRAY("Public key", public_key, 32);
     
-    TEST_ASSERT(mxd_init_p2p(12345, public_key) == 0, "P2P initialization successful");
+    TEST_ASSERT(mxd_init_p2p(12345, public_key, private_key) == 0, "P2P initialization successful");
     TEST_ASSERT(mxd_start_p2p() == 0, "P2P networking started");
     TEST_END("P2P Initialization");
 

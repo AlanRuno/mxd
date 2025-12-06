@@ -217,15 +217,25 @@ int mxd_init_utxo_db(const char *db_path) {
     rocksdb_options_set_create_if_missing(options, 1);
     rocksdb_options_set_compression(options, rocksdb_lz4_compression);
     
-    rocksdb_options_set_write_buffer_size(options, 64 * 1024 * 1024); // 64MB
-    rocksdb_options_set_max_write_buffer_number(options, 3);
-    rocksdb_options_set_target_file_size_base(options, 32 * 1024 * 1024); // 32MB
+    size_t write_buffer_size = 16 * 1024 * 1024; // 16MB (reduced from 64MB)
+    int max_write_buffer_number = 2; // 2 (reduced from 3)
+    size_t block_cache_size = 32 * 1024 * 1024; // 32MB (reduced from 128MB)
+    
+    rocksdb_options_set_write_buffer_size(options, write_buffer_size);
+    rocksdb_options_set_max_write_buffer_number(options, max_write_buffer_number);
+    rocksdb_options_set_target_file_size_base(options, 16 * 1024 * 1024); // 16MB (reduced from 32MB)
     
     rocksdb_options_set_paranoid_checks(options, 1);
     rocksdb_options_set_recycle_log_file_num(options, 1);
     rocksdb_options_set_skip_stats_update_on_db_open(options, 1);
+    rocksdb_options_set_max_open_files(options, 100); // Limit open file handles
+    rocksdb_options_set_max_background_jobs(options, 1); // Limit concurrent compaction memory
     
-    rocksdb_cache_t *cache = rocksdb_cache_create_lru(128 * 1024 * 1024); // 128MB
+    MXD_LOG_INFO("utxo", "RocksDB UTXO settings: write_buffer=%zu MB, max_buffers=%d, block_cache=%zu MB, total_est=%zu MB",
+                 write_buffer_size / (1024*1024), max_write_buffer_number, block_cache_size / (1024*1024),
+                 (write_buffer_size * max_write_buffer_number + block_cache_size) / (1024*1024));
+    
+    rocksdb_cache_t *cache = rocksdb_cache_create_lru(block_cache_size);
     rocksdb_block_based_table_options_t *table_options = rocksdb_block_based_options_create();
     rocksdb_block_based_options_set_block_cache(table_options, cache);
     rocksdb_options_set_block_based_table_factory(options, table_options);

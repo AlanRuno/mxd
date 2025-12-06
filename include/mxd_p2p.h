@@ -64,7 +64,7 @@ typedef struct {
 } mxd_message_header_t;
 
 // Initialize P2P networking
-int mxd_init_p2p(uint16_t port, const uint8_t *public_key);
+int mxd_init_p2p(uint16_t port, const uint8_t *public_key, const uint8_t *private_key);
 
 // Start P2P networking
 int mxd_start_p2p(void);
@@ -88,6 +88,11 @@ int mxd_get_peers(mxd_peer_t *peers, size_t *peer_count);
 int mxd_send_message(const char *address, uint16_t port,
                      mxd_message_type_t type, const void *payload,
                      size_t payload_length);
+
+// Send message to peer with retry logic
+int mxd_send_message_with_retry(const char *address, uint16_t port,
+                                mxd_message_type_t type, const void *payload,
+                                size_t payload_length, int max_retries);
 
 // Broadcast message to all peers
 int mxd_broadcast_message(mxd_message_type_t type, const void *payload,
@@ -152,6 +157,28 @@ int mxd_enable_nat_traversal(void);
 
 // Disable NAT traversal
 int mxd_disable_nat_traversal(void);
+
+// Get number of active connections
+int mxd_get_connection_count(void);
+
+// Get number of known peers from DHT
+int mxd_get_known_peer_count(void);
+
+// Peer connection information
+typedef struct {
+    char address[256];
+    uint16_t port;
+    uint64_t connected_at;
+    uint64_t last_keepalive_sent;
+    uint64_t last_keepalive_received;
+    int keepalive_failures;
+} mxd_peer_info_t;
+
+// Get detailed information about peer connections
+int mxd_get_peer_connections(mxd_peer_info_t* peer_info, size_t* count);
+
+// Get unified peer list (all peers we've communicated with)
+int mxd_get_unified_peers(mxd_peer_info_t* peer_info, size_t* count);
 
 #ifdef __cplusplus
 }

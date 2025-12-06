@@ -29,7 +29,7 @@ int mxd_verify_and_add_validation_signature(mxd_block_t *block,
 
 int mxd_check_block_relay_status(const uint8_t block_hash[64]);
 
-int mxd_sync_rapid_table(mxd_rapid_table_t *table);
+int mxd_sync_rapid_table(mxd_rapid_table_t *table, const char *local_node_id);
 
 int mxd_handle_validation_chain_conflict(const uint8_t block_hash1[64],
                                         const uint8_t block_hash2[64]);

@@ -1,10 +1,13 @@
 {
     "node_id": "default_node",
-    "network_type": "mainnet",
+    "network_type": "testnet",
     "port": 8000,
     "data_dir": "./data",
     "node_name": "MXD Default Node",
     "initial_stake": 100.0,
+    "bootstrap_nodes": [
+        "34.31.52.198:8000"
+    ],
     "metrics": {
         "update_interval": 1000,
         "display_interval": 5000,
@@ -17,10 +20,6 @@
         "stake_table_update_interval": 60000
     },
     "network": {
-        "bootstrap_nodes": [
-            "127.0.0.1:8001",
-            "127.0.0.1:8002"
-        ],
         "max_peers": 50,
         "connection_timeout": 5000
     },

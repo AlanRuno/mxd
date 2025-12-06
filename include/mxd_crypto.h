@@ -23,9 +23,13 @@ int mxd_ripemd160(const uint8_t *input, size_t length, uint8_t output[20]);
 // HASH160 (SHA-256 followed by RIPEMD-160)
 int mxd_hash160(const uint8_t *input, size_t length, uint8_t output[20]);
 
-// Argon2 key derivation
+// Argon2 key derivation (SENSITIVE: ~1GB memory, use for user passwords)
 int mxd_argon2(const char *input, const uint8_t *salt, uint8_t *output,
                size_t output_length);
+
+// Argon2 key derivation (INTERACTIVE: ~64MB memory, use for node keypairs)
+int mxd_argon2_lowmem(const char *input, const uint8_t *salt, uint8_t *output,
+                      size_t output_length);
 
 // Dilithium5 functions
 int mxd_dilithium_keygen(uint8_t *public_key, uint8_t *secret_key);

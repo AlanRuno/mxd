@@ -6,6 +6,18 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_BUILD_TYPE Debug)
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g3 -O0")
 
+# Get git commit hash for version tracking
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_COMMIT_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(GIT_COMMIT_HASH)
+    add_definitions(-DGIT_COMMIT_HASH="${GIT_COMMIT_HASH}")
+endif()
+
 # Windows-specific configuration
 if(WIN32)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
@@ -38,6 +50,7 @@ option(MXD_PQC_DILITHIUM "Enable Crystals Dilithium signatures via liboqs/PQClea
 pkg_check_modules(CJSON REQUIRED libcjson)
 pkg_check_modules(CURL REQUIRED libcurl)
 pkg_check_modules(LIBUV REQUIRED libuv)
+pkg_check_modules(MINIUPNPC REQUIRED miniupnpc)
 if(MXD_WITH_WASI)
   pkg_check_modules(UVWASI QUIET uvwasi)
 endif()
@@ -56,6 +69,7 @@ include_directories(
     ${WASM3_INCLUDE_DIRS}
     ${CJSON_INCLUDE_DIRS}
     ${CURL_INCLUDE_DIRS}
+    ${MINIUPNPC_INCLUDE_DIRS}
     ${ROCKSDB_INCLUDE_DIR}
 )
 if(MXD_WITH_WASI AND UVWASI_FOUND)
@@ -142,6 +156,7 @@ else()
         ${WASM3_LIBRARIES}
         ${CJSON_LIBRARIES}
         ${CURL_LIBRARIES}
+        ${MINIUPNPC_LIBRARIES}
         ${ROCKSDB_LIBRARY}
         -Wl,--no-whole-archive
         m

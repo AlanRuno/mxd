@@ -6,6 +6,7 @@
 typedef struct {
     char node_id[64];
     uint16_t port;
+    uint16_t metrics_port;     // Metrics/health endpoint port
     char data_dir[256];
     char network_type[32];     // mainnet, testnet
     char node_name[64];        // Node display name
@@ -14,6 +15,8 @@ typedef struct {
     char bootstrap_nodes[10][256];
     int bootstrap_count;
     char node_data[1024];      // Custom node data
+    int enable_upnp;           // Enable UPnP port mapping (1=enabled, 0=disabled)
+    int bootstrap_refresh_interval;  // Seconds between bootstrap list refreshes (from network_info.update_interval)
 } mxd_config_t;
 
 // Load configuration from file or use built-in defaults.

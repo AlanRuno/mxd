@@ -148,12 +148,27 @@ int mxd_check_block_relay_status(const uint8_t block_hash[64]) {
     return 0; // No, block does not have enough signatures for relay
 }
 
-int mxd_sync_rapid_table(mxd_rapid_table_t *table) {
+int mxd_sync_rapid_table(mxd_rapid_table_t *table, const char *local_node_id) {
     if (!table) return -1;
     
-    // For testing purposes, simulate successful sync
     MXD_LOG_INFO("sync", "Synchronizing Rapid Table with network");
-    return 0;
+    
+    uint32_t current_height = 0;
+    if (mxd_get_blockchain_height(&current_height) != 0 || current_height == 0) {
+        MXD_LOG_WARN("sync", "No blockchain data available for rapid table sync");
+        return 0;
+    }
+    
+    uint32_t from_height = current_height > 1000 ? current_height - 1000 : 0;
+    
+    if (mxd_rebuild_rapid_table_from_blockchain(table, from_height, current_height, local_node_id) == 0) {
+        MXD_LOG_INFO("sync", "Rapid Table synchronized from blockchain (heights %u to %u)", 
+                     from_height, current_height);
+        return 0;
+    } else {
+        MXD_LOG_ERROR("sync", "Failed to rebuild rapid table from blockchain");
+        return -1;
+    }
 }
 
 int mxd_handle_validation_chain_conflict(const uint8_t block_hash1[64], 

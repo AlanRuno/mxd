@@ -96,12 +96,22 @@ int mxd_init_blockchain_db(const char *db_path) {
     rocksdb_options_set_create_if_missing(options, 1);
     rocksdb_options_set_compression(options, rocksdb_lz4_compression);
     
-    rocksdb_options_set_write_buffer_size(options, 128 * 1024 * 1024); // 128MB
-    rocksdb_options_set_max_write_buffer_number(options, 4);
-    rocksdb_options_set_target_file_size_base(options, 64 * 1024 * 1024); // 64MB
-    rocksdb_options_set_level_compaction_dynamic_level_bytes(options, 1);
+    size_t write_buffer_size = 32 * 1024 * 1024; // 32MB (reduced from 128MB)
+    int max_write_buffer_number = 2; // 2 (reduced from 4)
+    size_t block_cache_size = 64 * 1024 * 1024; // 64MB (reduced from 256MB)
     
-    rocksdb_cache_t *cache = rocksdb_cache_create_lru(256 * 1024 * 1024); // 256MB
+    rocksdb_options_set_write_buffer_size(options, write_buffer_size);
+    rocksdb_options_set_max_write_buffer_number(options, max_write_buffer_number);
+    rocksdb_options_set_target_file_size_base(options, 32 * 1024 * 1024); // 32MB (reduced from 64MB)
+    rocksdb_options_set_level_compaction_dynamic_level_bytes(options, 1);
+    rocksdb_options_set_max_open_files(options, 200); // Limit open file handles
+    rocksdb_options_set_max_background_jobs(options, 2); // Limit concurrent compaction memory
+    
+    MXD_LOG_INFO("blockchain_db", "RocksDB Blockchain settings: write_buffer=%zu MB, max_buffers=%d, block_cache=%zu MB, total_est=%zu MB",
+                 write_buffer_size / (1024*1024), max_write_buffer_number, block_cache_size / (1024*1024),
+                 (write_buffer_size * max_write_buffer_number + block_cache_size) / (1024*1024));
+    
+    rocksdb_cache_t *cache = rocksdb_cache_create_lru(block_cache_size);
     rocksdb_block_based_table_options_t *table_options = rocksdb_block_based_options_create();
     rocksdb_block_based_options_set_block_cache(table_options, cache);
     rocksdb_options_set_block_based_table_factory(options, table_options);

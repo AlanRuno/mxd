@@ -9,30 +9,11 @@ extern "C" {
 #include <stdint.h>
 #include "mxd_blockchain.h"
 #include "mxd_blockchain_db.h"
+#include "common/mxd_metrics_types.h"
 
 int mxd_get_validator_public_key(const uint8_t validator_id[20], uint8_t *out_key, size_t out_capacity, size_t *out_len);
 int mxd_test_register_validator_pubkey(const uint8_t validator_id[20], const uint8_t *pub, size_t pub_len);
 void mxd_test_clear_validator_pubkeys(void);
-
-typedef struct {
-    uint64_t avg_response_time;
-    uint64_t min_response_time;
-    uint64_t max_response_time;
-    uint32_t response_count;
-    double tip_share;
-    uint64_t last_update;
-} mxd_node_metrics_t;
-
-typedef struct {
-    char node_id[64];
-    double stake_amount;
-    uint8_t public_key[256];
-    mxd_node_metrics_t metrics;
-    uint32_t rank;
-    uint8_t active;
-    uint8_t in_rapid_table;
-    uint32_t rapid_table_position;
-} mxd_node_stake_t;
 
 typedef struct {
     mxd_node_stake_t **nodes;
@@ -78,7 +59,7 @@ int mxd_validate_node_performance(const mxd_node_stake_t *node, uint64_t current
 
 int mxd_init_rapid_table(mxd_rapid_table_t *table, size_t capacity);
 
-int mxd_add_to_rapid_table(mxd_rapid_table_t *table, mxd_node_stake_t *node);
+int mxd_add_to_rapid_table(mxd_rapid_table_t *table, mxd_node_stake_t *node, const char *local_node_id);
 
 int mxd_remove_from_rapid_table(mxd_rapid_table_t *table, const char *node_id);
 
@@ -116,6 +97,19 @@ int mxd_get_next_validator(const mxd_block_t *block, const mxd_rapid_table_t *ta
 
 int mxd_process_validation_chain(mxd_block_t *block, mxd_validation_context_t *context,
                                 const mxd_rapid_table_t *table);
+
+int mxd_apply_membership_deltas(mxd_rapid_table_t *table, const mxd_block_t *block, 
+                                const char *local_node_id);
+
+int mxd_remove_expired_nodes(mxd_rapid_table_t *table, uint64_t current_time);
+
+int mxd_should_add_to_rapid_table(const mxd_node_stake_t *node, double total_supply, int is_genesis);
+
+int mxd_rebuild_rapid_table_from_blockchain(mxd_rapid_table_t *table, uint32_t from_height, 
+                                            uint32_t to_height, const char *local_node_id);
+
+int mxd_try_create_genesis_block(mxd_rapid_table_t *table, const uint8_t *node_address,
+                                  const uint8_t *private_key, const uint8_t *public_key);
 
 #ifdef __cplusplus
 }

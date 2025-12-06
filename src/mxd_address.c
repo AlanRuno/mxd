@@ -90,7 +90,8 @@ int mxd_generate_keypair(const uint8_t property_key[64],
   }
   uint8_t salt16[16] = {0};
   memcpy(salt16, secrets->crypto_salt, sizeof(salt16));
-  if (mxd_argon2((const char *)property_key, salt16, private_key, 128) != 0) {
+  
+  if (mxd_argon2_lowmem((const char *)property_key, salt16, private_key, 128) != 0) {
     return -1;
   }
 

@@ -90,7 +90,7 @@ static void test_node_lifecycle(void) {
     uint64_t start_time = get_current_time_ms();
     for (size_t i = 0; i < TEST_NODE_COUNT; i++) {
         uint16_t port = 12345 + i;
-        TEST_ASSERT(mxd_init_p2p(port, nodes[i].public_key) == 0,
+        TEST_ASSERT(mxd_init_p2p(port, nodes[i].public_key, node_private_keys[i]) == 0,
                    "P2P initialization");
         TEST_ASSERT(mxd_start_p2p() == 0, "P2P startup");
         

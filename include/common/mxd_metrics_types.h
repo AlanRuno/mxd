@@ -24,12 +24,14 @@ typedef struct {
 
 // Node stake information
 typedef struct {
-    mxd_node_metrics_t metrics;    // Node performance metrics
-    double stake_amount;           // Amount of stake held by node
-    char node_id[64];             // Unique node identifier
-    int active;                   // Node active status
-    int rank;                     // Node ranking in RSC
-    uint8_t public_key[256];      // Node's public key
+    char node_id[64];
+    double stake_amount;
+    uint8_t public_key[256];
+    mxd_node_metrics_t metrics;
+    uint32_t rank;
+    uint8_t active;
+    uint8_t in_rapid_table;
+    uint32_t rapid_table_position;
 } mxd_node_stake_t;
 
 #ifdef __cplusplus
