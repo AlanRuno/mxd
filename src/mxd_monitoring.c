@@ -440,7 +440,7 @@ const char* mxd_handle_wallet_generate(void) {
         return wallet_response_buffer;
     }
     
-    if (mxd_generate_keypair(property_key, public_key, private_key) != 0) {
+    if (mxd_generate_keypair(property_key, "", public_key, private_key) != 0) {
         pthread_mutex_unlock(&wallet_mutex);
         snprintf(wallet_response_buffer, sizeof(wallet_response_buffer),
             "{\"success\":false,\"error\":\"Failed to generate keypair\"}");

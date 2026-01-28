@@ -60,32 +60,66 @@ int mxd_generate_passphrase(char *output, size_t max_length) {
 
 int mxd_derive_property_key(const char *passphrase, const char *pin,
                             uint8_t property_key[64]) {
-  if (!passphrase || !pin || !property_key) {
+  if (!passphrase || !property_key) {
     return -1;
   }
 
-  // Combine passphrase and PIN
-  size_t passphrase_len = strlen(passphrase);
-  size_t pin_len = strlen(pin);
-  size_t combined_len = passphrase_len + pin_len;
+  // Double SHA-512 on passphrase ONLY (PIN not included here)
+  uint8_t temp_hash[64] = {0};
+  if (mxd_sha512((const uint8_t *)passphrase, strlen(passphrase), temp_hash) != 0) {
+    return -1;
+  }
+  if (mxd_sha512(temp_hash, 64, property_key) != 0) {
+    return -1;
+  }
 
-  // Allocate buffer for combined string
+  // NOTE: PIN is NOT used in property key derivation
+  // PIN will be used in mxd_generate_keypair with Argon2
+  (void)pin; // Suppress unused parameter warning
+
+  return 0;
+}
+
+int mxd_generate_keypair(const uint8_t property_key[64], const char *pin,
+                         uint8_t public_key[256], uint8_t private_key[128]) {
+  if (!property_key || !pin || !public_key || !private_key) {
+    return -1;
+  }
+
+  // Get crypto_salt from secrets
+  const mxd_secrets_t *secrets = mxd_get_secrets();
+  if (!secrets) {
+    return -1;
+  }
+
+  // Combine: property_key + separator + PIN + crypto_salt
+  // Format: <64 bytes property_key>|<PIN string>|<16 bytes crypto_salt>
+  size_t pin_len = strlen(pin);
+  size_t combined_len = 64 + 1 + pin_len + 1 + 16; // property_key + "|" + PIN + "|" + salt
+
   uint8_t *combined = (uint8_t *)malloc(combined_len);
   if (!combined) {
     return -1;
   }
 
-  // Copy passphrase and PIN into combined buffer
-  memcpy(combined, passphrase, passphrase_len);
-  memcpy(combined + passphrase_len, pin, pin_len);
+  // Build: property_key + "|" + PIN + "|" + crypto_salt
+  size_t offset = 0;
+  memcpy(combined + offset, property_key, 64);
+  offset += 64;
+  combined[offset++] = '|'; // separator
+  memcpy(combined + offset, pin, pin_len);
+  offset += pin_len;
+  combined[offset++] = '|'; // separator
+  memcpy(combined + offset, secrets->crypto_salt, 16);
+  offset += 16;
 
-  // Double SHA-512 on combined passphrase+PIN
-  uint8_t temp_hash[64] = {0};
-  if (mxd_sha512(combined, combined_len, temp_hash) != 0) {
-    free(combined);
-    return -1;
-  }
-  if (mxd_sha512(temp_hash, 64, property_key) != 0) {
+  // Derive private key using Argon2
+  // Using combined input as password, with crypto_salt as Argon2 salt
+  uint8_t argon2_salt[16] = {0};
+  memcpy(argon2_salt, secrets->crypto_salt, 16);
+
+  if (mxd_argon2_lowmem((const char *)combined, argon2_salt, private_key, 128) != 0) {
+    memset(combined, 0, combined_len);
     free(combined);
     return -1;
   }
@@ -93,27 +127,6 @@ int mxd_derive_property_key(const char *passphrase, const char *pin,
   // Clear sensitive data
   memset(combined, 0, combined_len);
   free(combined);
-
-  return 0;
-}
-
-int mxd_generate_keypair(const uint8_t property_key[64],
-                         uint8_t public_key[256], uint8_t private_key[128]) {
-  if (!property_key || !public_key || !private_key) {
-    return -1;
-  }
-
-  // First derive the private key using Argon2
-  const mxd_secrets_t *secrets = mxd_get_secrets();
-  if (!secrets) {
-    return -1;
-  }
-  uint8_t salt16[16] = {0};
-  memcpy(salt16, secrets->crypto_salt, sizeof(salt16));
-  
-  if (mxd_argon2_lowmem((const char *)property_key, salt16, private_key, 128) != 0) {
-    return -1;
-  }
 
   // Generate Dilithium keypair
   return mxd_dilithium_keygen(public_key, private_key);

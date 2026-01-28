@@ -56,7 +56,7 @@ static void test_keypair_generation(void) {
   TEST_START("Keypair Generation");
   TEST_ARRAY("Input property key", property_key, 64);
   
-  TEST_ASSERT(mxd_generate_keypair(property_key, public_key, private_key) == 0, "Keypair generation successful");
+  TEST_ASSERT(mxd_generate_keypair(property_key, "", public_key, private_key) == 0, "Keypair generation successful");
   TEST_ARRAY("Generated public key", public_key, 256);
   TEST_ARRAY("Generated private key", private_key, 128);
 

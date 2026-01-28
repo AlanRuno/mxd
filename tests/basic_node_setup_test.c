@@ -20,7 +20,7 @@ static void test_node_setup(void) {
                 "Passphrase generation");
     TEST_ASSERT(mxd_derive_property_key(passphrase, "1234", property_key) == 0,
                 "Property key derivation");
-    TEST_ASSERT(mxd_generate_keypair(property_key, public_key, private_key) == 0,
+    TEST_ASSERT(mxd_generate_keypair(property_key, "1234", public_key, private_key) == 0,
                 "Keypair generation");
     TEST_ASSERT(mxd_generate_address(public_key, address, sizeof(address)) == 0,
                 "Address generation");

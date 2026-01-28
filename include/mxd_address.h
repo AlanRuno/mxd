@@ -16,7 +16,8 @@ int mxd_derive_property_key(const char *passphrase, const char *pin,
                             uint8_t property_key[64]);
 
 // Generate public/private key pair from property key
-int mxd_generate_keypair(const uint8_t property_key[64],
+// PIN is used in Argon2 derivation: (property_key + separator + PIN + crypto_salt)
+int mxd_generate_keypair(const uint8_t property_key[64], const char *pin,
                          uint8_t public_key[256], uint8_t private_key[128]);
 
 // Generate MXD address from public key

@@ -175,7 +175,7 @@ static int load_or_generate_node_keypair(uint8_t public_key[256], uint8_t privat
         return -1;
     }
     
-    if (mxd_generate_keypair(property_key, public_key, private_key) != 0) {
+    if (mxd_generate_keypair(property_key, "", public_key, private_key) != 0) {
         MXD_LOG_ERROR("dht", "Failed to generate Dilithium keypair");
         return -1;
     }
