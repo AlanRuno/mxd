@@ -86,13 +86,36 @@ int mxd_generate_keypair(const uint8_t property_key[64], const char *pin,
     return -1;
   }
 
-  // Get crypto_salt from secrets
-  const mxd_secrets_t *secrets = mxd_get_secrets();
-  if (!secrets) {
+  // Derive deterministic salt from property_key
+  // This ensures same property_key always produces same salt (portable wallets)
+  // salt = SHA-512(property_key + "MXD_SALT_V1")[0..15]
+  uint8_t temp_hash[64] = {0};
+  const char *salt_domain = "MXD_SALT_V1";
+  size_t domain_len = strlen(salt_domain);
+  size_t salt_input_len = 64 + domain_len;
+
+  uint8_t *salt_input = (uint8_t *)malloc(salt_input_len);
+  if (!salt_input) {
     return -1;
   }
 
-  // Combine: property_key + separator + PIN + crypto_salt
+  memcpy(salt_input, property_key, 64);
+  memcpy(salt_input + 64, salt_domain, domain_len);
+
+  if (mxd_sha512(salt_input, salt_input_len, temp_hash) != 0) {
+    free(salt_input);
+    return -1;
+  }
+
+  // Take first 16 bytes as deterministic salt
+  uint8_t crypto_salt[16] = {0};
+  memcpy(crypto_salt, temp_hash, 16);
+
+  // Clear salt derivation buffer
+  memset(salt_input, 0, salt_input_len);
+  free(salt_input);
+
+  // Combine: property_key + separator + PIN + separator + crypto_salt
   // Format: <64 bytes property_key>|<PIN string>|<16 bytes crypto_salt>
   size_t pin_len = strlen(pin);
   size_t combined_len = 64 + 1 + pin_len + 1 + 16; // property_key + "|" + PIN + "|" + salt
@@ -110,13 +133,13 @@ int mxd_generate_keypair(const uint8_t property_key[64], const char *pin,
   memcpy(combined + offset, pin, pin_len);
   offset += pin_len;
   combined[offset++] = '|'; // separator
-  memcpy(combined + offset, secrets->crypto_salt, 16);
+  memcpy(combined + offset, crypto_salt, 16);
   offset += 16;
 
   // Derive private key using Argon2
   // Using combined input as password, with crypto_salt as Argon2 salt
   uint8_t argon2_salt[16] = {0};
-  memcpy(argon2_salt, secrets->crypto_salt, 16);
+  memcpy(argon2_salt, crypto_salt, 16);
 
   if (mxd_argon2_lowmem((const char *)combined, argon2_salt, private_key, 128) != 0) {
     memset(combined, 0, combined_len);
@@ -127,6 +150,8 @@ int mxd_generate_keypair(const uint8_t property_key[64], const char *pin,
   // Clear sensitive data
   memset(combined, 0, combined_len);
   free(combined);
+  memset(crypto_salt, 0, 16);
+  memset(temp_hash, 0, 64);
 
   // Generate Dilithium keypair
   return mxd_dilithium_keygen(public_key, private_key);
