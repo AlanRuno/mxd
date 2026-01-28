@@ -64,15 +64,35 @@ int mxd_derive_property_key(const char *passphrase, const char *pin,
     return -1;
   }
 
-  // Double SHA-512 on passphrase
+  // Combine passphrase and PIN
+  size_t passphrase_len = strlen(passphrase);
+  size_t pin_len = strlen(pin);
+  size_t combined_len = passphrase_len + pin_len;
+
+  // Allocate buffer for combined string
+  uint8_t *combined = (uint8_t *)malloc(combined_len);
+  if (!combined) {
+    return -1;
+  }
+
+  // Copy passphrase and PIN into combined buffer
+  memcpy(combined, passphrase, passphrase_len);
+  memcpy(combined + passphrase_len, pin, pin_len);
+
+  // Double SHA-512 on combined passphrase+PIN
   uint8_t temp_hash[64] = {0};
-  if (mxd_sha512((const uint8_t *)passphrase, strlen(passphrase), temp_hash) !=
-      0) {
+  if (mxd_sha512(combined, combined_len, temp_hash) != 0) {
+    free(combined);
     return -1;
   }
   if (mxd_sha512(temp_hash, 64, property_key) != 0) {
+    free(combined);
     return -1;
   }
+
+  // Clear sensitive data
+  memset(combined, 0, combined_len);
+  free(combined);
 
   return 0;
 }
