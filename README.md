@@ -1,4 +1,4 @@
-# MXD — Post-Quantum Blockchain
+# MXD — Mexican Denarius
 
 [![CI](https://github.com/AlanRuno/mxd/actions/workflows/ci.yml/badge.svg)](https://github.com/AlanRuno/mxd/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/AlanRuno/mxd)](https://github.com/AlanRuno/mxd/releases)
@@ -6,15 +6,32 @@
 [![Issues](https://img.shields.io/github/issues/AlanRuno/mxd)](https://github.com/AlanRuno/mxd/issues)
 [![Discussions](https://img.shields.io/github/discussions/AlanRuno/mxd)](https://github.com/AlanRuno/mxd/discussions)
 
-MXD is a hybrid classical/post-quantum Layer-1 blockchain with a one-way bridge
-to BNB Smart Chain. Both Ed25519 (classical, fast) and ML-DSA-87 / Dilithium5
-(FIPS 204, quantum-resistant) signature schemes are first-class citizens at the
-address, transaction, and consensus layers.
+> *"Firm roots, strong coin: MXD — Planting the seeds for digital economy in Mexico."*
+
+**Mexican Denarius (MXD)** is a hybrid classical/post-quantum Layer-1 blockchain
+with a one-way bridge to BNB Smart Chain. The project name comes from "deni"
+("containing ten"), the Latin root of denarius, hat-tipping the decimal base
+behind every monetary system. Both Ed25519 (classical, fast) and ML-DSA-87 /
+Dilithium5 (FIPS 204, quantum-resistant) signature schemes are first-class
+citizens at the address, transaction, and consensus layers.
 
 This repository contains the reference C implementation of the chain, the
 BSC-side bridge contract, the spec documents (`docs/standards/MXD-*`), and
 operator utilities. The chain is live on mainnet; see the [protocol specs](docs/standards/MXD-00-index.md)
 for wire formats and address derivation rules.
+
+## About the project
+
+MXD is built to be a fee-free, energy-efficient digital currency that hands
+control of value transfer back to its users. The economic and product context
+— mission, voluntary-tip-driven incentive model, optional fiscal-integration
+roadmap, and the broader vision for a digital economy in Mexico — is laid out
+in the project [white paper](https://mxd.com.mx/WhitePaper_En.pdf). This
+repository is the technical implementation of that vision: the chain, the
+bridge, the cryptography, and the conformance specs.
+
+The work began in 2020 under the **Cripto Águila** (Crypto Eagle) team and is
+operated today by [Runo Networks](https://runonetworks.com).
 
 ## Status
 
@@ -32,6 +49,11 @@ for wire formats and address derivation rules.
   Empty heartbeat blocks every ~5s when idle. Reorg via fork-choice score.
 - **Transactions.** UTXO model, 64-bit base units (`1 MXD = 100,000,000` base units).
   v3 transactions carry typed payloads for bridge mints and admin operations.
+- **Fee model.** Network-mandated transaction fees are **zero**: validators
+  only enforce `inputs >= outputs`. Senders MAY attach a voluntary tip
+  (`voluntary_tip` u64 field) that is distributed to the validators
+  participating in block closure, rewarding faster responders proportionally
+  more. The chain does not impose, deduct, or split off an implicit fee.
 - **Signing.** Per-output algo_id selects Ed25519 (algo 1) or Dilithium5 (algo 2).
   All addresses are 32 bytes with a version byte for network + algorithm.
 - **Bridge.** Users deposit BNBMXD on BSC; an oracle set of 5 Dilithium5 keys
@@ -173,8 +195,11 @@ forks from running closed-source.
 
 ## Acknowledgments
 
+- The **Cripto Águila** (Crypto Eagle) team for the founding vision, the
+  whitepaper, and four years of research that led to this release.
 - ML-DSA-87 / Dilithium5: NIST FIPS 204 (CRYSTALS-Dilithium team).
 - RocksDB, libmicrohttpd, cJSON, OpenSSL — the standard library dependencies.
 - The BSC team for the underlying BNB Smart Chain that hosts the bridge.
 
-Brought to you by [Runo Networks](https://runonetworks.com).
+Mainnet is operated by [Runo Networks](https://runonetworks.com). Read the
+project white paper at [mxd.com.mx](https://mxd.com.mx/WhitePaper_En.pdf).
