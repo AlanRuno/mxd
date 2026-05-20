@@ -1,0 +1,67 @@
+{
+  "spec": "MXD-CONS-01 v1.1.0",
+  "generator": "gen_mxd_cons01_vectors.mjs",
+  "constants": {
+    "domain_tag_hex": "4d58442d56414c2d563100",
+    "domain_tag_ascii": "MXD-VAL-V1\\0",
+    "op_type_join": "0x00",
+    "op_type_exit_deprecated": "0x01",
+    "op_type_evict_reserved": "0x02 (Phase 3, not yet specified)",
+    "algo_id_ed25519": "0x01",
+    "ed25519_pubkey_len": 32,
+    "ed25519_sig_len": 64,
+    "canonical_signed_bytes_total": 52,
+    "timestamp_units": "milliseconds since Unix epoch, big-endian u64"
+  },
+  "fixtures": {
+    "seed_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+    "pubkey_hex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+    "addr32_hex": "4d33c191345773c1a9d30205e4ab821701b440e350e4a488828b92adb41c9e56",
+    "timestamp_ms": 1737936000000,
+    "stake_base_units": "60500000"
+  },
+  "vectors": [
+    {
+      "name": "validator_join_ed25519",
+      "description": "52-byte JOIN canonical bytes signed with deterministic Ed25519 keypair (seed=0x42×32). Verifies as JOIN; MUST fail verification as EXIT.",
+      "canonical_signed_bytes_hex": "4d58442d56414c2d563100004d33c191345773c1a9d30205e4ab821701b440e350e4a488828b92adb41c9e5600000194a50ed400",
+      "canonical_signed_bytes_breakdown": {
+        "domain_tag_11": "4d58442d56414c2d563100",
+        "op_type_1": "00",
+        "addr32_32": "4d33c191345773c1a9d30205e4ab821701b440e350e4a488828b92adb41c9e56",
+        "timestamp_be_8": "00000194a50ed400"
+      },
+      "signature_hex": "8919a5c2b58bae5da36970128e12fad342b2d516693a48983e0ab07620e8d0102c97bcd7fdb8b0af2699f4d7599931511102c5f5901581d2163b70f45f7d7d0d",
+      "verify_join_expected": true,
+      "verify_join_actual": true,
+      "gossip_wire_payload_hex": "014d33c191345773c1a9d30205e4ab821701b440e350e4a488828b92adb41c9e5600202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db1200000000039b282000000194a50ed40000408919a5c2b58bae5da36970128e12fad342b2d516693a48983e0ab07620e8d0102c97bcd7fdb8b0af2699f4d7599931511102c5f5901581d2163b70f45f7d7d0d",
+      "gossip_wire_payload_breakdown": {
+        "algo_id_1": "01",
+        "addr32_32": "4d33c191345773c1a9d30205e4ab821701b440e350e4a488828b92adb41c9e56",
+        "pubkey_len_be_2": "0020",
+        "pubkey_32": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+        "stake_be_8": "00000000039b2820",
+        "timestamp_be_8": "00000194a50ed400",
+        "sig_len_be_2": "0040",
+        "sig_64": "8919a5c2b58bae5da36970128e12fad342b2d516693a48983e0ab07620e8d0102c97bcd7fdb8b0af2699f4d7599931511102c5f5901581d2163b70f45f7d7d0d"
+      },
+      "gossip_wire_payload_length": 149
+    },
+    {
+      "name": "validator_exit_ed25519_deprecated",
+      "description": "EXIT canonical bytes (op_type=0x01). DEPRECATED in v1.1.0 — self-driven exits are no longer accepted by Phase 1+2+4 code; EVICT (op_type=0x02, Phase 3) replaces this path. Included only for cross-replay vector below.",
+      "canonical_signed_bytes_hex": "4d58442d56414c2d563100014d33c191345773c1a9d30205e4ab821701b440e350e4a488828b92adb41c9e5600000194a50ed400",
+      "signature_hex": "2a7ddfa564c1c2d68cb08756f3115b9b88f9eb6705c7c3346120c40130022ee998d693e5cdf82dbd0237566401d7c77960fae052692f002d842e90ee22322c0d",
+      "verify_exit_expected": true,
+      "verify_exit_actual": true
+    },
+    {
+      "name": "cross_replay_join_sig_as_exit_negative",
+      "description": "A JOIN signature MUST NOT verify when presented against EXIT canonical bytes. This is the load-bearing op_type defense.",
+      "canonical_bytes_under_test_hex": "4d58442d56414c2d563100014d33c191345773c1a9d30205e4ab821701b440e350e4a488828b92adb41c9e5600000194a50ed400",
+      "signature_under_test_hex": "8919a5c2b58bae5da36970128e12fad342b2d516693a48983e0ab07620e8d0102c97bcd7fdb8b0af2699f4d7599931511102c5f5901581d2163b70f45f7d7d0d",
+      "verify_expected": false,
+      "verify_actual": false
+    }
+  ]
+}
