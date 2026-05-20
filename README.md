@@ -1,5 +1,11 @@
 # MXD — Post-Quantum Blockchain
 
+[![CI](https://github.com/AlanRuno/mxd/actions/workflows/ci.yml/badge.svg)](https://github.com/AlanRuno/mxd/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/AlanRuno/mxd)](https://github.com/AlanRuno/mxd/releases)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![Issues](https://img.shields.io/github/issues/AlanRuno/mxd)](https://github.com/AlanRuno/mxd/issues)
+[![Discussions](https://img.shields.io/github/discussions/AlanRuno/mxd)](https://github.com/AlanRuno/mxd/discussions)
+
 MXD is a hybrid classical/post-quantum Layer-1 blockchain with a one-way bridge
 to BNB Smart Chain. Both Ed25519 (classical, fast) and ML-DSA-87 / Dilithium5
 (FIPS 204, quantum-resistant) signature schemes are first-class citizens at the
