@@ -153,20 +153,40 @@ party can implement an admin-tx signer from the spec alone.
 
 ## Running a validator
 
-External validators are welcome. The current set of 5 mainnet validators is
-maintained by Runo Networks; expansion requires an `UPDATE_VALIDATOR_SET` admin
-transaction (3-of-5 oracle quorum). To prepare:
+External validators are welcome and the validator set is **permissionless and
+stake-driven** — no admin transaction, no governance vote, no quorum approval
+is required to join. The chain code at `src/blockchain/mxd_validator_management.c`
+admits any node whose self-signed JOIN request meets the on-chain stake
+threshold. The currently active mainnet set is operated by Runo Networks
+simply because they are the only nodes that have joined to date.
 
-1. Build `mxd_node` and `libmxd.so` from this repo.
-2. Generate a validator identity: `python3 tools/generate_node_key.py --out data/node_keys.v2`
-3. Configure your node from the sample in `src/mxd_config.c` — point at your
-   data directory and set your external IP. The node will bootstrap from
-   `https://mxd.network/bootstrap/main` automatically (mainnet) or
-   `https://mxd.network/bootstrap/test` (testnet), falling back to the
-   hardcoded `bootstrap{1,2,3}.mxd.network:8000` seeds if the HTTP fetch
-   fails. See `mxd_fetch_bootstrap_nodes` in `src/mxd_config.c` for the
-   full discovery flow.
-4. Reach out via Issues or Discussions to be added to the active validator set.
+To bring up your own validator:
+
+1. **Build** `mxd_node` and `libmxd.so` from this repo (see [Building](#building)).
+2. **Generate** a validator identity:
+   `python3 tools/generate_node_key.py --out data/node_keys.v2`.
+3. **Acquire stake.** A JOIN request is accepted iff the requesting address
+   holds at least **0.10 %** of `total_supply` in unspent UTXOs at the time
+   the request is processed (`stake_amount >= total_supply / 1000`, enforced
+   in `mxd_validator_management.c`).
+4. **Configure** the node from the sample in `src/mxd_config.c` — set your
+   data directory and external IP. Bootstrap is automatic:
+   `https://mxd.network/bootstrap/main` (mainnet) or
+   `https://mxd.network/bootstrap/test` (testnet), with fallback to the
+   hardcoded `bootstrap{1,2,3}.mxd.network:8000` seeds. See
+   `mxd_fetch_bootstrap_nodes` for the discovery flow.
+5. **Submit a JOIN request.** Sign the 52-byte canonical message
+   `"MXD-VAL-V1\0" || 0x00 || addr32 || timestamp_be` with your node key and
+   broadcast it. Once the chain validates your stake and signature, your
+   node enters the active validator set and starts participating in
+   round-robin block proposal and K-of-N chain signatures.
+   The wire format and validation rules are normative in
+   [MXD-CONS-01 §7](docs/standards/MXD-CONS-01-validator-consensus-signatures.md).
+6. **Exit** the set the same way with `op_type = 0x01` when you want to
+   stop validating.
+
+Discussions and Issues are the right place to ask for help bringing up a
+node, but joining the set is not gated on a maintainer decision.
 
 ## Oracle set (mainnet)
 
