@@ -137,9 +137,14 @@ transaction (3-of-5 oracle quorum). To prepare:
 
 1. Build `mxd_node` and `libmxd.so` from this repo.
 2. Generate a validator identity: `python3 tools/generate_node_key.py --out data/node_keys.v2`
-3. Configure your node from the sample in `src/mxd_config.c` — point at your data
-   directory, set your external IP, bootstrap from `bootstrap.mxd.runonetworks.com` (TBD).
-4. Reach out via Issues to be added to the active validator set.
+3. Configure your node from the sample in `src/mxd_config.c` — point at your
+   data directory and set your external IP. The node will bootstrap from
+   `https://mxd.network/bootstrap/main` automatically (mainnet) or
+   `https://mxd.network/bootstrap/test` (testnet), falling back to the
+   hardcoded `bootstrap{1,2,3}.mxd.network:8000` seeds if the HTTP fetch
+   fails. See `mxd_fetch_bootstrap_nodes` in `src/mxd_config.c` for the
+   full discovery flow.
+4. Reach out via Issues or Discussions to be added to the active validator set.
 
 ## Oracle set (mainnet)
 
