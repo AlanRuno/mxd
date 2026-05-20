@@ -4,12 +4,28 @@
 
 If you find a security issue in MXD (chain core, consensus, bridge contract,
 oracle attestation, or any component in this repository), **do not** open a
-public issue. Send a private report to:
+public issue. Use one of these private channels:
 
-- **Email:** security@runonetworks.com
-- **PGP:** TBD — published at https://runonetworks.com/.well-known/pgp.txt before public launch
+### Preferred: GitHub Private Security Advisories
 
-Include:
+Open a private report at:
+
+**https://github.com/AlanRuno/mxd/security/advisories/new**
+
+Or use the **Security → Report a vulnerability** button on the repository
+page. This routes your report to the maintainers privately and lets us
+coordinate a fix and disclosure timeline with you without leaking the issue
+to the public until a fix is ready. Requires a GitHub account.
+
+### Alternative: encrypted email
+
+If you cannot use GitHub for any reason, email **security@runonetworks.com**.
+For end-to-end encrypted email, request the maintainers' current PGP key
+through the GitHub advisory channel above first; PGP keys are not embedded
+in this repository to avoid stale-key risk.
+
+### What to include
+
 1. A description of the issue and the impact you believe it has.
 2. Steps to reproduce, ideally a minimal proof-of-concept.
 3. The commit hash and platform you tested against.
