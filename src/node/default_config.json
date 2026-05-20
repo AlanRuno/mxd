@@ -1,0 +1,34 @@
+{
+    "node_id": "default_node",
+    "network_type": "testnet",
+    "port": 8000,
+    "data_dir": "./data",
+    "node_name": "MXD Default Node",
+    "initial_stake": 120.0,
+    "preferred_sign_algo": 1,
+    "bootstrap_nodes": [
+        "bootstrap1.mxd.network:8000",
+        "bootstrap2.mxd.network:8000",
+        "bootstrap3.mxd.network:8000"
+    ],
+    "metrics": {
+        "update_interval": 1000,
+        "display_interval": 5000,
+        "performance_threshold": 10,
+        "max_latency": 3000,
+        "error_threshold": 10
+    },
+    "validation": {
+        "min_tps": 10,
+        "stake_table_update_interval": 60000
+    },
+    "network": {
+        "max_peers": 50,
+        "connection_timeout": 5000
+    },
+    "log_level": "info",
+    "pool": {
+        "max_size": 10000,
+        "cleanup_interval": 3600
+    }
+}

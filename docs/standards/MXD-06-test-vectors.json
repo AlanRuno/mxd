@@ -1,0 +1,160 @@
+{
+  "_spec": "MXD-06",
+  "_version": "1.0.0",
+  "_generated": "2026-05-06",
+  "_generator": "wallet-client/scripts/gen_mxd06_vectors.mjs",
+  "_note": "Handshake signed-payload vectors. The 84-byte canonical layout is byte-exact and must reproduce on any compliant implementation. Ed25519 signatures are deterministic per RFC 8032; Dilithium5 is randomized so we anchor only canonical bytes (no full signature transcript) for the PQ side.",
+  "domain_tag": {
+    "name": "MXD-P2P-V1",
+    "length_bytes": 11,
+    "bytes_hex": "4d58442d5032502d563100",
+    "ascii_zstring": "MXD-P2P-V1\\0"
+  },
+  "canonical_layout_84_bytes": {
+    "field_offsets": [
+      {
+        "offset": 0,
+        "name": "domain_tag",
+        "width": 11,
+        "value_hex": "4d58442d5032502d563100"
+      },
+      {
+        "offset": 11,
+        "name": "challenge",
+        "width": 32
+      },
+      {
+        "offset": 43,
+        "name": "timestamp_be",
+        "width": 8,
+        "encoding": "big-endian unsigned Unix seconds (per MXD-06 §3.1)"
+      },
+      {
+        "offset": 51,
+        "name": "algo_id",
+        "width": 1
+      },
+      {
+        "offset": 52,
+        "name": "addr32",
+        "width": 32
+      },
+      {
+        "offset": 84,
+        "name": "(end)",
+        "width": 0
+      }
+    ]
+  },
+  "positive_vectors": [
+    {
+      "name": "ed25519_canonical_84_bytes_with_signature_roundtrip",
+      "_ref": "MXD-06 §5",
+      "input": {
+        "challenge_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "timestamp_seconds": 1777996800,
+        "algo_id": 1,
+        "addr32_hex": "6f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e60",
+        "_addr32_derivation": "SHA-512(0x01 || pubkey32)[0..31] per MXD-01 §4",
+        "pubkey_hex": "0c88dc68ac619aa0f9e54138661505b36659306a8924f6f01b448f40c3518522",
+        "_signing_priv32_hex": "1dbe41d6b377d0aa72b1e58644c07da9cbc127b6d83b937154fed90611ab94b8",
+        "_ref_mxd02_vector": "abandon_x11_about_no_passphrase_account0"
+      },
+      "expected": {
+        "signed_payload_hex": "4d58442d5032502d563100000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0000000069fa1400016f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e60",
+        "signed_payload_length": 84,
+        "signature_hex": "2af79b8683f1cf4196a0483270ed0b06fc2c9271adc2e85bffd3c27a1d56547903cacc773257b6d2e543b3786155495f64e3e5de40272e3129e37e5e8d210700",
+        "signature_length": 64,
+        "verifies_against_pubkey": true,
+        "_note": "Ed25519 sign over the 84-byte canonical produces this signature deterministically (RFC 8032). A v7 verifier reconstructs the 84-byte payload from on-the-wire fields and runs Ed25519_Verify; success is the accept condition."
+      }
+    },
+    {
+      "name": "dilithium5_canonical_84_bytes_layout_anchor",
+      "_ref": "MXD-06 §5",
+      "_note": "Anchors only the canonical 84-byte layout for the Dilithium5 case. The signature transcript is omitted because ML-DSA-87 signing is randomized and the 4627-byte signature is impractical to transcribe; cross-impl parity is verified at the canonical-bytes layer.",
+      "input": {
+        "challenge_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "timestamp_seconds": 1777996800,
+        "algo_id": 2,
+        "addr32_hex": "58889ff578c007f90192d1e38a41e2a12970a154876dd438545a1612c864ced0",
+        "_addr32_ref": "MXD-01 vector dilithium5_active_mainnet_under_mxd_pq_01"
+      },
+      "expected": {
+        "signed_payload_hex": "4d58442d5032502d563100000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0000000069fa14000258889ff578c007f90192d1e38a41e2a12970a154876dd438545a1612c864ced0",
+        "signed_payload_length": 84,
+        "_byte_diff_from_ed25519_vector_at_offset_51": "0x02 instead of 0x01; bytes 52..83 also differ because addr32 differs."
+      }
+    },
+    {
+      "name": "domain_tag_bytes_anchor",
+      "_ref": "MXD-00 Domain-Tag Registry",
+      "input": {
+        "tag_name": "MXD-P2P-V1"
+      },
+      "expected": {
+        "length_bytes": 11,
+        "bytes_hex": "4d58442d5032502d563100",
+        "byte_array": [
+          77,
+          88,
+          68,
+          45,
+          80,
+          50,
+          80,
+          45,
+          86,
+          49,
+          0
+        ]
+      }
+    }
+  ],
+  "negative_vectors": [
+    {
+      "name": "pre_v7_signature_over_no_tag_form_rejected",
+      "_ref": "MXD-06 §9.1",
+      "_failure_rule": "A signature produced over the bare 73-byte (no-tag) payload does not verify against the v7 84-byte payload",
+      "input": {
+        "v7_canonical_hex": "4d58442d5032502d563100000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0000000069fa1400016f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e60",
+        "pre_v7_signed_bytes_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0000000069fa1400016f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e60",
+        "pre_v7_signature_hex": "19005bc5ad6ca08e4ee6e5adefbd04e2831c3fe5636f9d395821f7a388497e226dbabf5c7907b78b35eee2a93b6c3dace81b3d4b6a80a90575d35dfe14be1304"
+      },
+      "expected": {
+        "v7_verifier_accepts": false,
+        "_expected_to_be": false
+      }
+    },
+    {
+      "name": "protocol_version_pre_v7_peer_sends_5_v7_verifier_rejects",
+      "_ref": "MXD-06 §4, §6.2",
+      "_failure_rule": "protocol_version != receiver_expected (6)",
+      "input": {
+        "on_wire_protocol_version": 5,
+        "receiver_expected_protocol_version": 6
+      },
+      "expected": {
+        "accepted": false,
+        "error": "protocol_version mismatch (parse-time hard-reject)"
+      }
+    },
+    {
+      "name": "addr32_does_not_match_sha512_algoid_pubkey",
+      "_ref": "MXD-06 §6.5",
+      "_failure_rule": "derived_addr32 != claimed addr32",
+      "input": {
+        "on_wire_pubkey_hex": "0c88dc68ac619aa0f9e54138661505b36659306a8924f6f01b448f40c3518522",
+        "on_wire_algo_id": 1,
+        "on_wire_addr32_in_signed_bytes_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "derived_addr32_hex": "6f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e60",
+        "signed_payload_hex": "4d58442d5032502d563100000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0000000069fa140001aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "signature_hex": "1caccd6c82806a41b3213d14e4db64bfb4ff033501026c8df3f848779a8fe7e2cf3270e2c4cbfcc2140e5298cfa57d63756ec3a73e6f4f61cfadd8fef592fc01"
+      },
+      "expected": {
+        "accepted": false,
+        "error": "address consistency failure"
+      }
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+# LeakSanitizer Suppression File
+#
+# Suppresses known false positives or acceptable leaks
+# Format: leak:<pattern>
+
+# OpenSSL may cache some data
+leak:CRYPTO_malloc
+leak:CRYPTO_zalloc
+
+# SQLite internal caching
+leak:sqlite3_initialize
+leak:sqlite3MemMalloc
+
+# WASM3 runtime caching
+leak:m3_NewEnvironment
+leak:m3_NewRuntime
+
+# System libraries
+leak:libcrypto.so
+leak:libssl.so
+leak:libsqlite3.so

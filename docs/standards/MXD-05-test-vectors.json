@@ -1,0 +1,135 @@
+{
+  "_spec": "MXD-05",
+  "_version": "1.0.0",
+  "_generated": "2026-05-06",
+  "_generator": "wallet-client/scripts/gen_mxd05_vectors.mjs",
+  "_note": "All vectors use deterministic inputs (fixed password, salt, IV) so any compliant implementation can reproduce them.",
+  "positive_vectors": [
+    {
+      "name": "argon2id_v3_default_params_password_zero_indexed_salt",
+      "_ref": "MXD-05 §5.1",
+      "input": {
+        "password": "password",
+        "salt_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "kdf": "argon2id",
+        "kdfParams": {
+          "t": 3,
+          "m": 65536,
+          "p": 4,
+          "dkLen": 32
+        }
+      },
+      "expected": {
+        "derived_key_hex": "74ed3a2d9ce786bcff70336ea666b9acaee4cfc2ce826b28133b70b617983d52",
+        "_note": "Argon2id RFC 9106 with t=3, m=65536 KiB (64 MiB), p=4, dkLen=32. Salt is the indexed 0x00..0x1f sequence (32 bytes). Output is the AES-256 key."
+      }
+    },
+    {
+      "name": "pbkdf2_v2_owasp_600k_iters",
+      "_ref": "MXD-05 §5.2",
+      "input": {
+        "password": "password",
+        "salt_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "kdf": "pbkdf2",
+        "iterations": 600000,
+        "hash": "SHA-256"
+      },
+      "expected": {
+        "derived_key_hex": "ec8a0ecad184b3682d302776d881d38a15b343627c726dba7d9dbc3864d1cd5a",
+        "_note": "PBKDF2-HMAC-SHA-256 with 600k iterations (OWASP 2023 floor). Defines the v2 backwards-compat path. New blobs MUST NOT be produced this way."
+      }
+    },
+    {
+      "name": "pbkdf2_v2_legacy_100k_iters",
+      "_ref": "MXD-05 §5.2",
+      "input": {
+        "password": "password",
+        "salt_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "kdf": "pbkdf2",
+        "iterations": 100000,
+        "hash": "SHA-256"
+      },
+      "expected": {
+        "derived_key_hex": "0078f6ddcfd48dd2fbea4e34ecb6622d0960b9c44f1bad5113e2e2a214a63450",
+        "_note": "Pre-2024 wallets shipped at 100k iterations. A v3-aware implementation MUST decrypt these too."
+      }
+    },
+    {
+      "name": "aes_256_gcm_round_trip_with_argon2id_key",
+      "_ref": "MXD-05 §5.3",
+      "input": {
+        "key_hex": "74ed3a2d9ce786bcff70336ea666b9acaee4cfc2ce826b28133b70b617983d52",
+        "iv_hex": "202122232425262728292a2b2c2d2e2f",
+        "plaintext_utf8": "{\"mnemonic\":\"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\",\"privateKey\":\"1dbe41d6b377d0aa72b1e58644c07da9cbc127b6d83b937154fed90611ab94b8\",\"privateKeySeed\":null,\"privateKeySalt\":null,\"publicKey\":\"0c88dc68ac619aa0f9e54138661505b36659306a8924f6f01b448f40c3518522\",\"address\":\"mx2h3937WNPQReoNMEMeDALQhxJmPS8j1zxP38jjZWkvHvs6E927V\",\"algoId\":1,\"createdAt\":1745625600000}",
+        "plaintext_hex": "7b226d6e656d6f6e6963223a226162616e646f6e206162616e646f6e206162616e646f6e206162616e646f6e206162616e646f6e206162616e646f6e206162616e646f6e206162616e646f6e206162616e646f6e206162616e646f6e206162616e646f6e2061626f7574222c22707269766174654b6579223a2231646265343164366233373764306161373262316535383634346330376461396362633132376236643833623933373135346665643930363131616239346238222c22707269766174654b657953656564223a6e756c6c2c22707269766174654b657953616c74223a6e756c6c2c227075626c69634b6579223a2230633838646336386163363139616130663965353431333836363135303562333636353933303661383932346636663031623434386634306333353138353232222c2261646472657373223a226d78326833393337574e505152656f4e4d454d6544414c5168784a6d5053386a317a785033386a6a5a576b76487673364539323756222c22616c676f4964223a312c22637265617465644174223a313734353632353630303030307d",
+        "aad": null
+      },
+      "expected": {
+        "ciphertext_with_tag_hex": "c4319e70efcb2e42dbd5c225e2cc43d65ef3eb6968e9ead21efef100f55ca5e547afb937e068a38352f7397b2acb2f49da530a83ac47d7dd8e3792e1923ca12e1dea2795db4870ad27f57ba2c960b205724404e1ecd09ebb2c7a0f64a3da1f6b6b1ad370bdcbea5fae5e503da3b9436714d26e908533938a1ac909a66c1819bbe9341816a7edf26202fc073d8a3fef3871b2098ce6c51f5bfaab93e04d5ea834074ed95cc015de0e6aa73971626f794253925247cfdd4675827b3078c256e1bb3fe184d361b79d7a1c1e2a714bd189382f2281ae1a114ccf99bad44d05cc5f2245f0b04cdc8e71cf0b72e2de012927a0909ee1f8b9dfa6582a8d6b452183f19f8711a4f7f3538ad81ea0b5c594041d9eaef8761dff293578d0bd6d7b73733413d70924d9df623ea0cf38457fdc5838a10ec76585251ee89d3a5ef910fdb3ceb1dec5860ef52004634a4fe6429c37153c8df5f2f955379ccfcaff9145a47a42b774af37e3e4c52c07fe84a125e51cd879944cc22f2b3e1e5027c772163c08c9e802c46f9d4aa150fe6f5a6c3c31d73914a0f5427c26619f8ead781ef5defdd72d84dab8aa93c72c657246d8a1ccea",
+        "ciphertext_only_hex": "c4319e70efcb2e42dbd5c225e2cc43d65ef3eb6968e9ead21efef100f55ca5e547afb937e068a38352f7397b2acb2f49da530a83ac47d7dd8e3792e1923ca12e1dea2795db4870ad27f57ba2c960b205724404e1ecd09ebb2c7a0f64a3da1f6b6b1ad370bdcbea5fae5e503da3b9436714d26e908533938a1ac909a66c1819bbe9341816a7edf26202fc073d8a3fef3871b2098ce6c51f5bfaab93e04d5ea834074ed95cc015de0e6aa73971626f794253925247cfdd4675827b3078c256e1bb3fe184d361b79d7a1c1e2a714bd189382f2281ae1a114ccf99bad44d05cc5f2245f0b04cdc8e71cf0b72e2de012927a0909ee1f8b9dfa6582a8d6b452183f19f8711a4f7f3538ad81ea0b5c594041d9eaef8761dff293578d0bd6d7b73733413d70924d9df623ea0cf38457fdc5838a10ec76585251ee89d3a5ef910fdb3ceb1dec5860ef52004634a4fe6429c37153c8df5f2f955379ccfcaff9145a47a42b774af37e3e4c52c07fe84a125e51cd879944cc22f2b3e1e5027c772163c08c9e802c46f9d4aa150fe6f5a6c3c31d73914a0f5427c26619f8ead781ef5defd",
+        "tag_hex": "d72d84dab8aa93c72c657246d8a1ccea",
+        "_note": "AES-256-GCM, 16-byte IV, no AAD. WebCrypto returns ciphertext||tag concatenated; the trailing 16 bytes are the GCM authentication tag."
+      }
+    },
+    {
+      "name": "wallet_blob_v3_full_shape_canonical_mnemonic",
+      "_ref": "MXD-05 §3, §4",
+      "input": {
+        "password": "password",
+        "salt_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "iv_hex": "202122232425262728292a2b2c2d2e2f",
+        "kdfParams": {
+          "t": 3,
+          "m": 65536,
+          "p": 4
+        },
+        "wallet_data": {
+          "_ref_mxd02": "abandon_x11_about_no_passphrase_account0",
+          "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+          "privateKey": "1dbe41d6b377d0aa72b1e58644c07da9cbc127b6d83b937154fed90611ab94b8",
+          "publicKey": "0c88dc68ac619aa0f9e54138661505b36659306a8924f6f01b448f40c3518522",
+          "address": "mx2h3937WNPQReoNMEMeDALQhxJmPS8j1zxP38jjZWkvHvs6E927V",
+          "addr32_hex": "6f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e60",
+          "algoId": 1,
+          "createdAt": 1745625600000
+        }
+      },
+      "expected": {
+        "wallet_blob": {
+          "version": 3,
+          "encrypted": true,
+          "algoId": 1,
+          "publicKey": "0c88dc68ac619aa0f9e54138661505b36659306a8924f6f01b448f40c3518522",
+          "address": "mx2h3937WNPQReoNMEMeDALQhxJmPS8j1zxP38jjZWkvHvs6E927V",
+          "encryptedData": "c4319e70efcb2e42dbd5c225e2cc43d65ef3eb6968e9ead21efef100f55ca5e547afb937e068a38352f7397b2acb2f49da530a83ac47d7dd8e3792e1923ca12e1dea2795db4870ad27f57ba2c960b205724404e1ecd09ebb2c7a0f64a3da1f6b6b1ad370bdcbea5fae5e503da3b9436714d26e908533938a1ac909a66c1819bbe9341816a7edf26202fc073d8a3fef3871b2098ce6c51f5bfaab93e04d5ea834074ed95cc015de0e6aa73971626f794253925247cfdd4675827b3078c256e1bb3fe184d361b79d7a1c1e2a714bd189382f2281ae1a114ccf99bad44d05cc5f2245f0b04cdc8e71cf0b72e2de012927a0909ee1f8b9dfa6582a8d6b452183f19f8711a4f7f3538ad81ea0b5c594041d9eaef8761dff293578d0bd6d7b73733413d70924d9df623ea0cf38457fdc5838a10ec76585251ee89d3a5ef910fdb3ceb1dec5860ef52004634a4fe6429c37153c8df5f2f955379ccfcaff9145a47a42b774af37e3e4c52c07fe84a125e51cd879944cc22f2b3e1e5027c772163c08c9e802c46f9d4aa150fe6f5a6c3c31d73914a0f5427c26619f8ead781ef5defdd72d84dab8aa93c72c657246d8a1ccea",
+          "salt": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+          "iv": "202122232425262728292a2b2c2d2e2f",
+          "kdf": "argon2id",
+          "kdfParams": {
+            "t": 3,
+            "m": 65536,
+            "p": 4
+          },
+          "createdAt": 1745625600000
+        },
+        "_note": "Full wallet blob in the v3 shape (MXD-05 §3). The encryptedData is byte-identical to the AES-256-GCM round-trip vector above. publicKey/address are MXD-01/MXD-02 cross-references."
+      }
+    }
+  ],
+  "negative_vectors": [
+    {
+      "name": "wrong_password_aes_gcm_tag_mismatch",
+      "_ref": "MXD-05 §5.3, §6 (lazy migration write-back is best-effort)",
+      "_failure_rule": "GCM authentication tag verification fails when the derived key differs from the encrypt-time key",
+      "input": {
+        "wallet_blob_ref": "wallet_blob_v3_full_shape_canonical_mnemonic",
+        "wrong_password": "wrong-password"
+      },
+      "expected": {
+        "decrypt_succeeds": false,
+        "error_substring": "Decryption failed",
+        "_decrypt_attempted": false
+      }
+    }
+  ]
+}

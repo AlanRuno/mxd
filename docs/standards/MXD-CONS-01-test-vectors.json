@@ -1,0 +1,352 @@
+{
+  "_spec": "MXD-CONS-01",
+  "_version": "1.0.0",
+  "_generated": "2026-05-06",
+  "_generator": "wallet-client/scripts/gen_mxd_cons01_vectors.mjs",
+  "_note": "Validator-consensus-signature canonical-bytes vectors. The chain_hash construction is iterative per position; the 147-byte validation-chain canonical and the 52-byte validator JOIN/EXIT canonicals are byte-exact and reproducible. Genesis-announce canonical lengths are 51+N where N is the pubkey size (32 for Ed25519 = 83 total; 2592 for Dilithium5 = 2643 total).",
+  "domain_tags": {
+    "cons": {
+      "name": "MXD-CONS-1",
+      "length_bytes": 11,
+      "bytes_hex": "4d58442d434f4e532d3100"
+    },
+    "val": {
+      "name": "MXD-VAL-V1",
+      "length_bytes": 11,
+      "bytes_hex": "4d58442d56414c2d563100"
+    }
+  },
+  "positive_vectors": [
+    {
+      "name": "chain_hash_position_0_seed",
+      "_ref": "MXD-CONS-01 §3.1",
+      "input": {
+        "block_hash_hex": "88cc4486e71b44c8488e18e605f7b2291294988994156096d1950f9918c284cec09b3d46f3faa932156a9508e6d8cf7b5489b36c53763f38de9075278977d3ab",
+        "_block_hash_source": "live v7 testnet height=1 latest_hash (2026-05-06)"
+      },
+      "expected": {
+        "chain_hash_0_hex": "a9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251a3a0af907b98b9b90a7cb4255f40c1c8d0afec88e49c88068ee7443579c18548",
+        "_formula": "SHA-512(block_hash)"
+      }
+    },
+    {
+      "name": "chain_hash_position_1_after_one_signature",
+      "_ref": "MXD-CONS-01 §3.1",
+      "input": {
+        "block_hash_hex": "88cc4486e71b44c8488e18e605f7b2291294988994156096d1950f9918c284cec09b3d46f3faa932156a9508e6d8cf7b5489b36c53763f38de9075278977d3ab",
+        "chain_hash_prev_hex": "a9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251a3a0af907b98b9b90a7cb4255f40c1c8d0afec88e49c88068ee7443579c18548",
+        "prev_signature_bytes_hex": "24ce6f0f78e35a403bb54162ce647ac10f6f611ed9df481118edff1fc55c4de6c862c48c9af71252830215bcb6015c0933d6120be876c7d7a7e6f44ca7eeb50a",
+        "_signature_source": "Ed25519 sign over the 147-byte position-0 canonical with priv32 from MXD-02 abandon_x11_about_no_passphrase_account0"
+      },
+      "expected": {
+        "chain_hash_1_hex": "c416ce5c8e876dfb99f3adf885c79994e1a66fa17ad33265fadab4ef9f7abe35a361f42cc6bc2ec07ea2e0a6edbeb9c3dd62ede1ff3eff4b528727a8ee2f18a8",
+        "_formula": "SHA-512(chain_hash_0 || sig_0)"
+      }
+    },
+    {
+      "name": "validation_chain_canonical_147_bytes_position_0",
+      "_ref": "MXD-CONS-01 §3.2",
+      "input": {
+        "block_hash_hex": "88cc4486e71b44c8488e18e605f7b2291294988994156096d1950f9918c284cec09b3d46f3faa932156a9508e6d8cf7b5489b36c53763f38de9075278977d3ab",
+        "chain_hash_K_hex": "a9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251a3a0af907b98b9b90a7cb4255f40c1c8d0afec88e49c88068ee7443579c18548",
+        "timestamp_ms": 1777996800000,
+        "_chain_position": 0
+      },
+      "expected": {
+        "canonical_hex": "4d58442d434f4e532d310088cc4486e71b44c8488e18e605f7b2291294988994156096d1950f9918c284cec09b3d46f3faa932156a9508e6d8cf7b5489b36c53763f38de9075278977d3aba9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251a3a0af907b98b9b90a7cb4255f40c1c8d0afec88e49c88068ee7443579c185480000019df8de2000",
+        "canonical_length": 147,
+        "field_offsets": [
+          {
+            "offset": 0,
+            "name": "domain_tag",
+            "width": 11,
+            "value_hex": "4d58442d434f4e532d3100"
+          },
+          {
+            "offset": 11,
+            "name": "block_hash",
+            "width": 64
+          },
+          {
+            "offset": 75,
+            "name": "chain_hash_K",
+            "width": 64
+          },
+          {
+            "offset": 139,
+            "name": "timestamp_be",
+            "width": 8,
+            "encoding": "big-endian milliseconds since Unix epoch"
+          },
+          {
+            "offset": 147,
+            "name": "(end)",
+            "width": 0
+          }
+        ],
+        "_signature_anchor": "24ce6f0f78e35a403bb54162ce647ac10f6f611ed9df481118edff1fc55c4de6c862c48c9af71252830215bcb6015c0933d6120be876c7d7a7e6f44ca7eeb50a",
+        "_signature_verifies_against_pubkey": true
+      }
+    },
+    {
+      "name": "domain_tag_bytes_anchors",
+      "_ref": "MXD-00 Domain-Tag Registry",
+      "expected": {
+        "cons": {
+          "name": "MXD-CONS-1",
+          "length": 11,
+          "hex": "4d58442d434f4e532d3100",
+          "bytes": [
+            77,
+            88,
+            68,
+            45,
+            67,
+            79,
+            78,
+            83,
+            45,
+            49,
+            0
+          ]
+        },
+        "val": {
+          "name": "MXD-VAL-V1",
+          "length": 11,
+          "hex": "4d58442d56414c2d563100",
+          "bytes": [
+            77,
+            88,
+            68,
+            45,
+            86,
+            65,
+            76,
+            45,
+            86,
+            49,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "name": "validator_join_canonical_52_bytes_op_type_0x00",
+      "_ref": "MXD-CONS-01 §4",
+      "input": {
+        "addr32_hex": "6f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e60",
+        "timestamp_ms": 1777996800000
+      },
+      "expected": {
+        "canonical_hex": "4d58442d56414c2d563100006f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e600000019df8de2000",
+        "canonical_length": 52,
+        "op_type_hex": "00",
+        "field_offsets": [
+          {
+            "offset": 0,
+            "name": "domain_tag (MXD-VAL-V1\\0)",
+            "width": 11
+          },
+          {
+            "offset": 11,
+            "name": "op_type",
+            "width": 1,
+            "value_hex": "00"
+          },
+          {
+            "offset": 12,
+            "name": "addr32",
+            "width": 32
+          },
+          {
+            "offset": 44,
+            "name": "timestamp_be",
+            "width": 8
+          },
+          {
+            "offset": 52,
+            "name": "(end)",
+            "width": 0
+          }
+        ],
+        "signature_hex": "a3e47e7acc93588f99ad9dc18a52f22958f9c1ee9d4b2c46be9b070c699971b6bb118990db95e8485e62fa078221ace2ad7e860ba3750220bd2626a8941a2e02",
+        "signature_verifies": true
+      }
+    },
+    {
+      "name": "validator_exit_canonical_52_bytes_op_type_0x01",
+      "_ref": "MXD-CONS-01 §4",
+      "input": {
+        "addr32_hex": "6f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e60",
+        "timestamp_ms": 1777996800000,
+        "_same_addr32_and_ts_as_join": true
+      },
+      "expected": {
+        "canonical_hex": "4d58442d56414c2d563100016f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e600000019df8de2000",
+        "canonical_length": 52,
+        "op_type_hex": "01",
+        "_byte_diff_from_join_at_offset_11": "0x01 instead of 0x00; all other bytes identical because addr32 and timestamp are the same.",
+        "signature_hex": "ee8b123452fd97ed0a473b256f99e41119a28494c3b0f3662b25f4a92ab9eb1e0959fba353631f0e0f0c22fc0139b351a418cba7ae1d57b00416aa84d35e870e",
+        "signature_verifies": true
+      }
+    },
+    {
+      "name": "genesis_announce_canonical_ed25519_83_bytes",
+      "_ref": "MXD-CONS-01 §5",
+      "input": {
+        "algo_id": 1,
+        "addr32_hex": "6f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e60",
+        "pubkey_hex": "0c88dc68ac619aa0f9e54138661505b36659306a8924f6f01b448f40c3518522",
+        "pubkey_length": 32,
+        "timestamp_ms": 1777996800000
+      },
+      "expected": {
+        "canonical_hex": "4d58442d434f4e532d31006f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e600c88dc68ac619aa0f9e54138661505b36659306a8924f6f01b448f40c35185220000019df8de2000",
+        "canonical_length": 83,
+        "field_offsets": [
+          {
+            "offset": 0,
+            "name": "domain_tag (MXD-CONS-1\\0)",
+            "width": 11
+          },
+          {
+            "offset": 11,
+            "name": "addr32",
+            "width": 32
+          },
+          {
+            "offset": 43,
+            "name": "pubkey (Ed25519, 32 bytes)",
+            "width": 32
+          },
+          {
+            "offset": 75,
+            "name": "timestamp_be",
+            "width": 8
+          },
+          {
+            "offset": 83,
+            "name": "(end)",
+            "width": 0
+          }
+        ],
+        "signature_hex": "e820bb772df97c26d74bd9ecb728441133d9fe5a81316e4b75df9073534f4a092e9dd2e01f4134787d5c0cd804e0c43677ca1b55c18a5e363cfaedb1095b890b",
+        "signature_verifies": true
+      }
+    },
+    {
+      "name": "genesis_announce_canonical_dilithium5_2643_bytes_layout_anchor",
+      "_ref": "MXD-CONS-01 §5",
+      "_note": "Synthetic 2592-byte Dilithium5 pubkey produced by SHA-512 keystream expansion of an all-0xC7 seed; this anchors the canonical-bytes layout for the PQ case without requiring a real ML-DSA-87 signature transcript (which would be ~4627 bytes and randomized).",
+      "input": {
+        "algo_id": 2,
+        "addr32_hex": "7749a389ab7bc8c4915579876ac9ef69a059d94288737fc4232e0be076e7778c",
+        "pubkey_first_32_bytes_hex": "30e1202285bf93e52e1796f828be82d7c3ef113e9a82a8dd1005f2726e2fe941",
+        "pubkey_last_32_bytes_hex": "95c9600824c83d011ff3b455a4e43a54fc0f77f4143755b9d5e20216efc8ca27",
+        "pubkey_length": 2592,
+        "pubkey_seed_explanation": "SHA-512 expansion seed = 64 bytes of 0xC7; pubkey[i*64..i*64+64] = SHA-512(prev_chunk) starting from prev=seed.",
+        "pubkey_sha512_hex": "392d3c2db6968e6aa9664558d7e1c4622cbf25b50c705a0115ed48242e344bf2d53c11101fb379d768992dd6f2cb316908813b3baafd4590155a64f33b4110ef",
+        "timestamp_ms": 1777996800000
+      },
+      "expected": {
+        "canonical_length": 2643,
+        "canonical_first_64_bytes_hex": "4d58442d434f4e532d31007749a389ab7bc8c4915579876ac9ef69a059d94288737fc4232e0be076e7778c30e1202285bf93e52e1796f828be82d7c3ef113e9a",
+        "canonical_last_8_bytes_hex": "0000019df8de2000",
+        "canonical_sha512_hex": "4890ad88276b1cb353f8ddfeb75f9eb30d2807fdf95f617a05ab761e61a9153553315a071c1bfc5af886273ff7814cc2ec10da85948db08479992aef341cce81",
+        "field_offsets": [
+          {
+            "offset": 0,
+            "name": "domain_tag",
+            "width": 11
+          },
+          {
+            "offset": 11,
+            "name": "addr32",
+            "width": 32
+          },
+          {
+            "offset": 43,
+            "name": "pubkey (Dilithium5, 2592 bytes)",
+            "width": 2592
+          },
+          {
+            "offset": 2635,
+            "name": "timestamp_be",
+            "width": 8
+          },
+          {
+            "offset": 2643,
+            "name": "(end)",
+            "width": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "chain_hash_three_validator_chain_integrity",
+      "_ref": "MXD-CONS-01 §3.1, §7.1",
+      "input": {
+        "block_hash_hex": "88cc4486e71b44c8488e18e605f7b2291294988994156096d1950f9918c284cec09b3d46f3faa932156a9508e6d8cf7b5489b36c53763f38de9075278977d3ab",
+        "timestamps_ms": [
+          1777996800000,
+          1777996801000,
+          1777996802500
+        ],
+        "validator_addrs": [
+          "6f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e60",
+          "8cce86c92acf6a1432b57df8d68fb61bdb4a9166a23b0f2d53932c8543e4f6f2",
+          "33608a3685015cd5431baf0ebfeb41c63b47fc36a8361bff23049c35141eca86"
+        ]
+      },
+      "expected": {
+        "chain_hash_0_hex": "a9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251a3a0af907b98b9b90a7cb4255f40c1c8d0afec88e49c88068ee7443579c18548",
+        "chain_hash_1_hex": "c416ce5c8e876dfb99f3adf885c79994e1a66fa17ad33265fadab4ef9f7abe35a361f42cc6bc2ec07ea2e0a6edbeb9c3dd62ede1ff3eff4b528727a8ee2f18a8",
+        "chain_hash_2_hex": "a807f11553780cd71067c4aab501e91d874e7f9530353e808a34a389cc899be3f000837568c9fab6543f52adb42d9768f8ca23097a8e220420d26a456f53c53b",
+        "position_0": {
+          "canonical_hex": "4d58442d434f4e532d310088cc4486e71b44c8488e18e605f7b2291294988994156096d1950f9918c284cec09b3d46f3faa932156a9508e6d8cf7b5489b36c53763f38de9075278977d3aba9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251a3a0af907b98b9b90a7cb4255f40c1c8d0afec88e49c88068ee7443579c185480000019df8de2000",
+          "signature_hex": "24ce6f0f78e35a403bb54162ce647ac10f6f611ed9df481118edff1fc55c4de6c862c48c9af71252830215bcb6015c0933d6120be876c7d7a7e6f44ca7eeb50a"
+        },
+        "position_1": {
+          "canonical_hex": "4d58442d434f4e532d310088cc4486e71b44c8488e18e605f7b2291294988994156096d1950f9918c284cec09b3d46f3faa932156a9508e6d8cf7b5489b36c53763f38de9075278977d3abc416ce5c8e876dfb99f3adf885c79994e1a66fa17ad33265fadab4ef9f7abe35a361f42cc6bc2ec07ea2e0a6edbeb9c3dd62ede1ff3eff4b528727a8ee2f18a80000019df8de23e8",
+          "signature_hex": "53b95e2b35aba51427f70e4a215e611cffc28a90ee0ba661eea6d440cd33385ea949871bef8aea7dad898ad158e7d2b0186e14afe6c06f682a1a434975da5504"
+        },
+        "position_2": {
+          "canonical_hex": "4d58442d434f4e532d310088cc4486e71b44c8488e18e605f7b2291294988994156096d1950f9918c284cec09b3d46f3faa932156a9508e6d8cf7b5489b36c53763f38de9075278977d3aba807f11553780cd71067c4aab501e91d874e7f9530353e808a34a389cc899be3f000837568c9fab6543f52adb42d9768f8ca23097a8e220420d26a456f53c53b0000019df8de29c4",
+          "signature_hex": "2c846552a2ac377fcb0411b911f8b9f3c8157362992009a0daa7fd3f15e0a5b7caaa03ee1f2890692381c9ccdfcd2284544fe527c31e9de28f5eaa38357b2802"
+        },
+        "_invariant": "chain_hash_2 = SHA-512(chain_hash_1 || sig_1) and chain_hash_1 = SHA-512(chain_hash_0 || sig_0); reorder/swap of any prior signature changes every chain_hash from that position onward."
+      }
+    }
+  ],
+  "negative_vectors": [
+    {
+      "name": "pre_v7_signature_over_no_tag_validation_chain_form_rejected",
+      "_ref": "MXD-CONS-01 §7.3",
+      "_failure_rule": "Pre-v7 (no-tag) signed bytes do not verify against the v7 (147-byte) tagged canonical",
+      "input": {
+        "v7_canonical_hex": "4d58442d434f4e532d310088cc4486e71b44c8488e18e605f7b2291294988994156096d1950f9918c284cec09b3d46f3faa932156a9508e6d8cf7b5489b36c53763f38de9075278977d3aba9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251a3a0af907b98b9b90a7cb4255f40c1c8d0afec88e49c88068ee7443579c185480000019df8de2000",
+        "pre_v7_signed_bytes_hex": "88cc4486e71b44c8488e18e605f7b2291294988994156096d1950f9918c284cec09b3d46f3faa932156a9508e6d8cf7b5489b36c53763f38de9075278977d3aba9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251a3a0af907b98b9b90a7cb4255f40c1c8d0afec88e49c88068ee7443579c185480000019df8de2000",
+        "pre_v7_signed_bytes_length": 136,
+        "pre_v7_signature_hex": "8dab68464dd2625920529ffde0d09a328bd04cc4dee06d8a335da606f967a92b1c8f1b94ccca11ddbdb00b1b1bd7dd4d75a9ffee6f006d11bbfd07e0ad302101"
+      },
+      "expected": {
+        "v7_verifier_accepts": false,
+        "_expected_to_be": false
+      }
+    },
+    {
+      "name": "join_signature_replayed_as_exit_op_type_byte_differs",
+      "_ref": "MXD-CONS-01 §4.1",
+      "_failure_rule": "JOIN signature was produced over op_type=0x00; EXIT verifier reconstructs canonical with op_type=0x01 → signed bytes differ → verify fails",
+      "input": {
+        "join_canonical_hex": "4d58442d56414c2d563100006f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e600000019df8de2000",
+        "join_signature_hex": "a3e47e7acc93588f99ad9dc18a52f22958f9c1ee9d4b2c46be9b070c699971b6bb118990db95e8485e62fa078221ace2ad7e860ba3750220bd2626a8941a2e02",
+        "exit_canonical_hex": "4d58442d56414c2d563100016f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e600000019df8de2000"
+      },
+      "expected": {
+        "exit_verifier_accepts_join_sig": false,
+        "_expected_to_be": false
+      }
+    }
+  ]
+}

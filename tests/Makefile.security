@@ -1,0 +1,91 @@
+# Security Fixes Test Suite Makefile
+# Supports Thread Sanitizer, Address Sanitizer, and normal builds
+
+CC = gcc
+CFLAGS = -Wall -Wextra -I../include -g -O0
+LDFLAGS = -lpthread -lrocksdb -lssl -lcrypto -lwasm3 -lm
+
+# Source files
+SOURCES = ../src/mxd_smart_contracts.c \
+          ../src/mxd_contracts_db.c \
+          ../src/mxd_wasm_validator.c \
+          ../src/mxd_crypto.c \
+          ../src/mxd_merkle_trie.c \
+          ../src/mxd_endian.c \
+          ../src/mxd_logging.c
+
+TEST_SOURCE = test_security_fixes.c
+
+# Targets
+all: test_normal
+
+# Normal build (no sanitizers)
+test_normal: $(TEST_SOURCE) $(SOURCES)
+	@echo "Building normal test binary..."
+	$(CC) $(CFLAGS) -o test_security_fixes $(TEST_SOURCE) $(SOURCES) $(LDFLAGS)
+	@echo "Done! Run with: ./test_security_fixes"
+
+# Thread Sanitizer build
+test_tsan: $(TEST_SOURCE) $(SOURCES)
+	@echo "Building with Thread Sanitizer..."
+	$(CC) $(CFLAGS) -fsanitize=thread -o test_security_fixes_tsan $(TEST_SOURCE) $(SOURCES) $(LDFLAGS)
+	@echo "Done! Run with: ./test_security_fixes_tsan"
+
+# Address Sanitizer build
+test_asan: $(TEST_SOURCE) $(SOURCES)
+	@echo "Building with Address Sanitizer..."
+	$(CC) $(CFLAGS) -fsanitize=address -o test_security_fixes_asan $(TEST_SOURCE) $(SOURCES) $(LDFLAGS)
+	@echo "Done! Run with: ./test_security_fixes_asan"
+
+# Memory Sanitizer build (requires clang)
+test_msan:
+	@echo "Building with Memory Sanitizer..."
+	clang $(CFLAGS) -fsanitize=memory -o test_security_fixes_msan $(TEST_SOURCE) $(SOURCES) $(LDFLAGS)
+	@echo "Done! Run with: ./test_security_fixes_msan"
+
+# Undefined Behavior Sanitizer
+test_ubsan: $(TEST_SOURCE) $(SOURCES)
+	@echo "Building with UndefinedBehavior Sanitizer..."
+	$(CC) $(CFLAGS) -fsanitize=undefined -o test_security_fixes_ubsan $(TEST_SOURCE) $(SOURCES) $(LDFLAGS)
+	@echo "Done! Run with: ./test_security_fixes_ubsan"
+
+# Run all sanitizer tests
+test_all_sanitizers: test_tsan test_asan test_ubsan
+	@echo ""
+	@echo "========================================="
+	@echo " Running Thread Sanitizer Tests"
+	@echo "========================================="
+	./test_security_fixes_tsan
+	@echo ""
+	@echo "========================================="
+	@echo " Running Address Sanitizer Tests"
+	@echo "========================================="
+	./test_security_fixes_asan
+	@echo ""
+	@echo "========================================="
+	@echo " Running UndefinedBehavior Sanitizer"
+	@echo "========================================="
+	./test_security_fixes_ubsan
+
+# Run normal tests
+run: test_normal
+	@echo ""
+	@echo "========================================="
+	@echo " Running Security Tests"
+	@echo "========================================="
+	./test_security_fixes
+
+# Valgrind memory leak check
+valgrind: test_normal
+	@echo "Running Valgrind memory leak detection..."
+	valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes \
+	         --verbose --log-file=valgrind-out.txt ./test_security_fixes
+
+# Clean
+clean:
+	rm -f test_security_fixes test_security_fixes_tsan test_security_fixes_asan \
+	      test_security_fixes_msan test_security_fixes_ubsan \
+	      valgrind-out.txt
+	rm -rf /tmp/test_*_db
+
+.PHONY: all test_normal test_tsan test_asan test_msan test_ubsan test_all_sanitizers run valgrind clean

@@ -1,0 +1,27 @@
+#include "../include/mxd_domain_tags.h"
+
+/*
+ * Domain tags are stored as explicit byte arrays so the layout is
+ * independent of source-file encoding and can be byte-asserted from
+ * tests. See mxd_domain_tags.h for the registry and per-tag lengths.
+ */
+
+const uint8_t MXD_DOMAIN_TAG_TX[MXD_DOMAIN_TAG_TX_LEN] = {
+    0x4D, 0x58, 0x44, 0x2D, 0x54, 0x58, 0x2D, 0x56, 0x31, 0x00
+}; /* "MXD-TX-V1\0" — 10 bytes */
+
+const uint8_t MXD_DOMAIN_TAG_VAL[MXD_DOMAIN_TAG_VAL_LEN] = {
+    0x4D, 0x58, 0x44, 0x2D, 0x56, 0x41, 0x4C, 0x2D, 0x56, 0x31, 0x00
+}; /* "MXD-VAL-V1\0" — 11 bytes */
+
+const uint8_t MXD_DOMAIN_TAG_P2P[MXD_DOMAIN_TAG_P2P_LEN] = {
+    0x4D, 0x58, 0x44, 0x2D, 0x50, 0x32, 0x50, 0x2D, 0x56, 0x31, 0x00
+}; /* "MXD-P2P-V1\0" — 11 bytes */
+
+const uint8_t MXD_DOMAIN_TAG_BRG[MXD_DOMAIN_TAG_BRG_LEN] = {
+    0x4D, 0x58, 0x44, 0x2D, 0x42, 0x52, 0x47, 0x2D, 0x56, 0x31, 0x00
+}; /* "MXD-BRG-V1\0" — 11 bytes */
+
+const uint8_t MXD_DOMAIN_TAG_CONS[MXD_DOMAIN_TAG_CONS_LEN] = {
+    0x4D, 0x58, 0x44, 0x2D, 0x43, 0x4F, 0x4E, 0x53, 0x2D, 0x31, 0x00
+}; /* "MXD-CONS-1\0" — 11 bytes */

@@ -1,0 +1,215 @@
+{
+  "_spec": "MXD-API-01",
+  "_version": "1.0.0",
+  "_generated": "2026-05-06",
+  "_generator": "wallet-client/scripts/gen_mxd_api01_vectors.mjs",
+  "_note": "Bridge oracle attestation canonical-bytes vectors. The 220-byte canonical signed message of MXD-API-01 §4 is byte-exact and reproducible. Ed25519 signature is deterministic (RFC 8032); Dilithium5 case anchors only canonical bytes (signature transcript omitted).",
+  "domain_tag": {
+    "name": "MXD-BRG-V1",
+    "length_bytes": 11,
+    "bytes_hex": "4d58442d4252472d563100",
+    "byte_array": [
+      77,
+      88,
+      68,
+      45,
+      66,
+      82,
+      71,
+      45,
+      86,
+      49,
+      0
+    ]
+  },
+  "positive_vectors": [
+    {
+      "name": "canonical_220_bytes_ed25519_oracle_bsc_testnet_97",
+      "_ref": "MXD-API-01 §4",
+      "input": {
+        "type": "bridge_mint",
+        "bridge_contract_hex": "00112233445566778899aabbccddeeff0123456789abcdef0123456789abcdeffedcba9876543210fedcba9876543210a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+        "source_chain_id": "bsc_testnet_97",
+        "source_chain_id_u32": 97,
+        "source_tx_hash_hex": "7777777777777777777777777777777777777777777777777777777777777777",
+        "source_block_number": 123,
+        "recipient_addr32_hex": "6f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e60",
+        "amount_base_units": 100000000,
+        "oracle_algo_id": 1,
+        "oracle_pubkey_hex": "0c88dc68ac619aa0f9e54138661505b36659306a8924f6f01b448f40c3518522",
+        "mxd_chain_id_hex": "a9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251",
+        "_mxd_chain_id_source": "SHA-512(live v7 testnet genesis block_hash)[0..31] — anchored to mxd_chain_id_derivation vector"
+      },
+      "expected": {
+        "canonical_hex": "4d58442d4252472d5631000100112233445566778899aabbccddeeff0123456789abcdef0123456789abcdeffedcba9876543210fedcba9876543210a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500000061000000000000000000000000000000000000000000000000000000007777777777777777777777777777777777777777777777777777777777777777000000000000007b6f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e600000000005f5e100a9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251",
+        "canonical_length": 220,
+        "field_offsets": [
+          {
+            "offset": 0,
+            "name": "domain_tag",
+            "width": 11,
+            "value_hex": "4d58442d4252472d563100"
+          },
+          {
+            "offset": 11,
+            "name": "algo_id",
+            "width": 1,
+            "value_hex": "01"
+          },
+          {
+            "offset": 12,
+            "name": "bridge_contract",
+            "width": 64
+          },
+          {
+            "offset": 76,
+            "name": "source_chain_id",
+            "width": 32,
+            "encoding": "u32 BE in bytes 0..3, remaining 28 bytes zero"
+          },
+          {
+            "offset": 108,
+            "name": "source_tx_hash",
+            "width": 32
+          },
+          {
+            "offset": 140,
+            "name": "source_block_number",
+            "width": 8,
+            "encoding": "u64 BE"
+          },
+          {
+            "offset": 148,
+            "name": "recipient",
+            "width": 32,
+            "encoding": "addr32"
+          },
+          {
+            "offset": 180,
+            "name": "amount",
+            "width": 8,
+            "encoding": "u64 BE base units"
+          },
+          {
+            "offset": 188,
+            "name": "mxd_chain_id",
+            "width": 32
+          },
+          {
+            "offset": 220,
+            "name": "(end)",
+            "width": 0
+          }
+        ],
+        "oracle_signature_hex": "32c149256db6f1351965461a72314a865e2575daf7a354ebb005a5da49cdc3bcbbae587e0248cc640f3d317fd74b02356b125b94ca06753386243d1461fb5302",
+        "oracle_signature_length": 64,
+        "signature_verifies_against_pubkey": true
+      }
+    },
+    {
+      "name": "canonical_220_bytes_dilithium5_oracle_byte_layout_anchor",
+      "_ref": "MXD-API-01 §4, §4.1",
+      "_note": "Same fields as the Ed25519 vector except algo_id = 0x02 at offset 11. Anchors that the cross-algorithm replay defense works at the byte layer (only one byte differs).",
+      "input": {
+        "oracle_algo_id": 2,
+        "_all_other_fields_identical_to_ed25519_vector": true
+      },
+      "expected": {
+        "canonical_hex": "4d58442d4252472d5631000200112233445566778899aabbccddeeff0123456789abcdef0123456789abcdeffedcba9876543210fedcba9876543210a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500000061000000000000000000000000000000000000000000000000000000007777777777777777777777777777777777777777777777777777777777777777000000000000007b6f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e600000000005f5e100a9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251",
+        "canonical_length": 220,
+        "byte_diff_from_ed25519_vector": {
+          "offset": 11,
+          "ed25519_byte_hex": "01",
+          "dilithium5_byte_hex": "02",
+          "all_other_bytes_identical": true
+        }
+      }
+    },
+    {
+      "name": "mxd_chain_id_derivation_sha512_first_32",
+      "_ref": "MXD-API-01 §5",
+      "input": {
+        "genesis_block_hash_hex": "88cc4486e71b44c8488e18e605f7b2291294988994156096d1950f9918c284cec09b3d46f3faa932156a9508e6d8cf7b5489b36c53763f38de9075278977d3ab",
+        "_genesis_source": "Captured from a v7 testnet via the /block/0 endpoint — block at index 0 with prev_hash all zeros and transaction_count=5 (initial validator-stake coinbases). This is a canonical v7 testnet genesis hash for spec-conformance testing; mainnet implementations MUST substitute their own genesis hash."
+      },
+      "expected": {
+        "sha512_full_hex": "a9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251a3a0af907b98b9b90a7cb4255f40c1c8d0afec88e49c88068ee7443579c18548",
+        "mxd_chain_id_hex": "a9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251",
+        "mxd_chain_id_length": 32,
+        "_formula": "mxd_chain_id = SHA-512(genesis_block_hash)[0..31]"
+      }
+    },
+    {
+      "name": "big_endian_encoding_block_number_and_amount",
+      "_ref": "MXD-API-01 §3.1, §4",
+      "input": {
+        "source_block_number_decimal": 123,
+        "amount_base_units_decimal": 100000000
+      },
+      "expected": {
+        "source_block_number_be_hex": "000000000000007b",
+        "amount_base_units_be_hex": "0000000005f5e100",
+        "_note": "Both encoded as u64 big-endian. Pre-v7 oracles used host-native (little-endian on x86) encoding; v7 explicitly mandates BE per MXD-04 §3."
+      }
+    },
+    {
+      "name": "source_chain_id_field_layout_first_4_bytes_be_rest_zero",
+      "_ref": "MXD-API-01 §3.1",
+      "input": {
+        "source_chain_id_string": "bsc_testnet_97",
+        "source_chain_id_u32": 97
+      },
+      "expected": {
+        "source_chain_id_field_hex": "0000006100000000000000000000000000000000000000000000000000000000",
+        "first_4_bytes_hex": "00000061",
+        "remaining_28_bytes_hex": "00000000000000000000000000000000000000000000000000000000",
+        "_formula": "source_chain_id_field = u32_BE(chain_id) || zero[28]"
+      }
+    },
+    {
+      "name": "source_chain_id_field_bsc_mainnet_56",
+      "_ref": "MXD-API-01 §3, §3.1",
+      "input": {
+        "source_chain_id_string": "bsc_mainnet_56",
+        "source_chain_id_u32": 56
+      },
+      "expected": {
+        "source_chain_id_field_hex": "0000003800000000000000000000000000000000000000000000000000000000",
+        "first_4_bytes_hex": "00000038"
+      }
+    }
+  ],
+  "negative_vectors": [
+    {
+      "name": "pre_v7_little_endian_encoding_rejected",
+      "_ref": "MXD-API-01 §3.1, §9.5",
+      "_failure_rule": "Pre-v7 oracles encoded source_block_number and amount in host-native (LE on x86); a v7 verifier reconstructs the canonical with BE → bytes differ → signature does not verify.",
+      "input": {
+        "v7_canonical_hex": "4d58442d4252472d5631000100112233445566778899aabbccddeeff0123456789abcdef0123456789abcdeffedcba9876543210fedcba9876543210a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500000061000000000000000000000000000000000000000000000000000000007777777777777777777777777777777777777777777777777777777777777777000000000000007b6f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e600000000005f5e100a9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251",
+        "le_canonical_hex": "4d58442d4252472d5631000100112233445566778899aabbccddeeff0123456789abcdef0123456789abcdeffedcba9876543210fedcba9876543210a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5000000610000000000000000000000000000000000000000000000000000000077777777777777777777777777777777777777777777777777777777777777777b000000000000006f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e6000e1f50500000000a9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251",
+        "le_block_number_hex": "7b00000000000000",
+        "le_amount_hex": "00e1f50500000000",
+        "le_signature_hex": "bfbdfd1eaad506b8018dcae746e3c309ef026664f7ff5b8e09b06735f34f5f1881aa7b607f1ca0a11cae0d377375ef94c30bd6da8e1728d372b5791576076d02"
+      },
+      "expected": {
+        "v7_verifier_accepts_le_signature": false,
+        "_expected_to_be": false,
+        "byte_diff_count": 8
+      }
+    },
+    {
+      "name": "cross_algorithm_replay_algo_id_byte_binding",
+      "_ref": "MXD-API-01 §4.1, §9.3",
+      "_failure_rule": "algo_id is part of the signed bytes (offset 11). A signature produced with algo_id=0x01 cannot satisfy a verifier that reconstructs with algo_id=0x02.",
+      "input": {
+        "sig_produced_over_canonical_hex": "4d58442d4252472d5631000100112233445566778899aabbccddeeff0123456789abcdef0123456789abcdeffedcba9876543210fedcba9876543210a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500000061000000000000000000000000000000000000000000000000000000007777777777777777777777777777777777777777777777777777777777777777000000000000007b6f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e600000000005f5e100a9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251",
+        "verifier_reconstructed_canonical_hex": "4d58442d4252472d5631000200112233445566778899aabbccddeeff0123456789abcdef0123456789abcdeffedcba9876543210fedcba9876543210a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a500000061000000000000000000000000000000000000000000000000000000007777777777777777777777777777777777777777777777777777777777777777000000000000007b6f12bd469d86df28baa0cb379e532fca3425aa1f7ac1a681be262a7517470e600000000005f5e100a9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251",
+        "signature_hex": "32c149256db6f1351965461a72314a865e2575daf7a354ebb005a5da49cdc3bcbbae587e0248cc640f3d317fd74b02356b125b94ca06753386243d1461fb5302"
+      },
+      "expected": {
+        "verify_succeeds": false,
+        "_expected_to_be": false
+      }
+    }
+  ]
+}
