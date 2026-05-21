@@ -70,6 +70,7 @@ const DOMAIN_VAL = new Uint8Array([0x4d, 0x58, 0x44, 0x2d, 0x56, 0x41, 0x4c, 0x2
 const ALGO_ED25519 = 0x01;
 const OP_JOIN = 0x00;
 const OP_EXIT = 0x01;
+const OP_EVICT = 0x02;
 
 // Deterministic seed: 0x42 * 32
 const seed = new Uint8Array(32).fill(0x42);
@@ -100,6 +101,52 @@ const exitCanonical = buildCanonical(OP_EXIT);
 const joinSig = await ed25519Sign(seed, joinCanonical);
 const exitSig = await ed25519Sign(seed, exitCanonical);
 
+// v1.2.0: EVICT canonical bytes (84 B) and gossip wire (173 B Ed25519).
+// The evictor signs; for these test vectors we use the same deterministic
+// keypair as the "active validator that signs the eviction" and a second
+// derived address as the "target being evicted" (target = SHA-512(0x01 ||
+// pubkey-of-different-seed) but we want a deterministic fixture, so we
+// just craft a target_addr32 from a known seed-of-target).
+const targetSeed = new Uint8Array(32).fill(0x37);
+const targetPubkey = await ed25519PublicFromSeed(targetSeed);
+const targetAddrInput = new Uint8Array(1 + targetPubkey.length);
+targetAddrInput[0] = ALGO_ED25519;
+targetAddrInput.set(targetPubkey, 1);
+const targetAddr32 = sha512(targetAddrInput).slice(0, 32);
+
+function buildEvictCanonical(target, evictor, ts) {
+  const buf = new Uint8Array(DOMAIN_VAL.length + 1 + 32 + 32 + 8);
+  let o = 0;
+  buf.set(DOMAIN_VAL, o); o += DOMAIN_VAL.length;
+  buf[o++] = OP_EVICT;
+  buf.set(target, o); o += 32;
+  buf.set(evictor, o); o += 32;
+  buf.set(u64be(ts), o);
+  return buf;
+}
+
+// EVICT: target = targetAddr32, evictor = addr32 (signs with seed key).
+const evictCanonical = buildEvictCanonical(targetAddr32, addr32, timestamp_ms);
+const evictSig = await ed25519Sign(seed, evictCanonical);
+
+function buildEvictWire(target, evictor, evictor_pk, ts, sig) {
+  const parts = [];
+  parts.push(target);
+  parts.push(evictor);
+  parts.push(new Uint8Array([ALGO_ED25519]));
+  parts.push(new Uint8Array([0, evictor_pk.length]));
+  parts.push(evictor_pk);
+  parts.push(u64be(ts));
+  parts.push(new Uint8Array([0, sig.length]));
+  parts.push(sig);
+  const total = parts.reduce((s, p) => s + p.length, 0);
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
+}
+const evictWire = buildEvictWire(targetAddr32, addr32, pubkey, timestamp_ms, evictSig);
+
 // Reproduce the MXD_MSG_VALIDATOR_JOIN_REQUEST wire payload per
 // mxd_serialize_join_request (mxd_validator_management.c:597).
 //   algo_id(1) | addr32(32) | pk_len_be(2) | pubkey | stake_be(8) | ts_be(8) | sig_len_be(2) | sig
@@ -128,26 +175,32 @@ const joinWire = buildWire(OP_JOIN, joinSig);
 const verifyJoin = await ed25519Verify(pubkey, joinCanonical, joinSig);
 const verifyExit = await ed25519Verify(pubkey, exitCanonical, exitSig);
 const crossJoinAsExit = await ed25519Verify(pubkey, exitCanonical, joinSig);
+const verifyEvict = await ed25519Verify(pubkey, evictCanonical, evictSig);
+const crossJoinAsEvict = await ed25519Verify(pubkey, evictCanonical, joinSig);
 
 const vectors = {
-  spec: 'MXD-CONS-01 v1.1.0',
+  spec: 'MXD-CONS-01 v1.2.0',
   generator: 'gen_mxd_cons01_vectors.mjs',
   constants: {
     domain_tag_hex: hex(DOMAIN_VAL),
     domain_tag_ascii: 'MXD-VAL-V1\\0',
     op_type_join: '0x00',
     op_type_exit_deprecated: '0x01',
-    op_type_evict_reserved: '0x02 (Phase 3, not yet specified)',
+    op_type_evict: '0x02 (v1.2.0, v8 gated)',
     algo_id_ed25519: '0x01',
     ed25519_pubkey_len: 32,
     ed25519_sig_len: 64,
-    canonical_signed_bytes_total: 52,
+    canonical_signed_bytes_join: 52,
+    canonical_signed_bytes_evict: 84,
     timestamp_units: 'milliseconds since Unix epoch, big-endian u64'
   },
   fixtures: {
     seed_hex: hex(seed),
     pubkey_hex: hex(pubkey),
     addr32_hex: hex(addr32),
+    target_seed_hex: hex(targetSeed),
+    target_pubkey_hex: hex(targetPubkey),
+    target_addr32_hex: hex(targetAddr32),
     timestamp_ms,
     stake_base_units: stake.toString()
   },
@@ -193,6 +246,41 @@ const vectors = {
       signature_under_test_hex: hex(joinSig),
       verify_expected: false,
       verify_actual: crossJoinAsExit
+    },
+    {
+      name: 'validator_evict_ed25519',
+      description: '84-byte EVICT canonical bytes signed by the evictor (seed=0x42×32). Target derived from seed=0x37×32. Verifies as EVICT. Includes the 173-byte gossip wire payload with full byte-level breakdown.',
+      canonical_signed_bytes_hex: hex(evictCanonical),
+      canonical_signed_bytes_breakdown: {
+        domain_tag_11: hex(evictCanonical.slice(0, 11)),
+        op_type_1: hex(evictCanonical.slice(11, 12)),
+        target_addr32_32: hex(evictCanonical.slice(12, 44)),
+        evictor_addr32_32: hex(evictCanonical.slice(44, 76)),
+        timestamp_be_8: hex(evictCanonical.slice(76, 84))
+      },
+      signature_hex: hex(evictSig),
+      verify_evict_expected: true,
+      verify_evict_actual: verifyEvict,
+      gossip_wire_payload_hex: hex(evictWire),
+      gossip_wire_payload_breakdown: {
+        target_addr32_32: hex(targetAddr32),
+        evictor_addr32_32: hex(addr32),
+        evictor_algo_id_1: '01',
+        evictor_pk_len_be_2: '0020',
+        evictor_pubkey_32: hex(pubkey),
+        timestamp_be_8: hex(u64be(timestamp_ms)),
+        sig_len_be_2: '0040',
+        sig_64: hex(evictSig)
+      },
+      gossip_wire_payload_length: evictWire.length
+    },
+    {
+      name: 'cross_replay_join_sig_as_evict_negative',
+      description: 'A JOIN signature MUST NOT verify when presented against EVICT canonical bytes. The 52-byte JOIN bytes and 84-byte EVICT bytes have different lengths, but the load-bearing defense is the op_type byte at offset 11 — even if a future flow happens to align on length, the op_type still disambiguates.',
+      canonical_bytes_under_test_hex: hex(evictCanonical),
+      signature_under_test_hex: hex(joinSig),
+      verify_expected: false,
+      verify_actual: crossJoinAsEvict
     }
   ]
 };

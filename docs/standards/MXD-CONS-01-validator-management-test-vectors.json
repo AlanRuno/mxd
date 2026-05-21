@@ -1,22 +1,26 @@
 {
-  "spec": "MXD-CONS-01 v1.1.0",
+  "spec": "MXD-CONS-01 v1.2.0",
   "generator": "gen_mxd_cons01_vectors.mjs",
   "constants": {
     "domain_tag_hex": "4d58442d56414c2d563100",
     "domain_tag_ascii": "MXD-VAL-V1\\0",
     "op_type_join": "0x00",
     "op_type_exit_deprecated": "0x01",
-    "op_type_evict_reserved": "0x02 (Phase 3, not yet specified)",
+    "op_type_evict": "0x02 (v1.2.0, v8 gated)",
     "algo_id_ed25519": "0x01",
     "ed25519_pubkey_len": 32,
     "ed25519_sig_len": 64,
-    "canonical_signed_bytes_total": 52,
+    "canonical_signed_bytes_join": 52,
+    "canonical_signed_bytes_evict": 84,
     "timestamp_units": "milliseconds since Unix epoch, big-endian u64"
   },
   "fixtures": {
     "seed_hex": "4242424242424242424242424242424242424242424242424242424242424242",
     "pubkey_hex": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
     "addr32_hex": "4d33c191345773c1a9d30205e4ab821701b440e350e4a488828b92adb41c9e56",
+    "target_seed_hex": "3737373737373737373737373737373737373737373737373737373737373737",
+    "target_pubkey_hex": "2c848ad8664ee651e4896c13a84a89a2964aca5eb77a8b881e60ded5c81b4e9d",
+    "target_addr32_hex": "bd8608bbc80ee14cb3c63c68f1e84d67040fb8625590f3033a9318f111633a8e",
     "timestamp_ms": 1737936000000,
     "stake_base_units": "60500000"
   },
@@ -59,6 +63,41 @@
       "name": "cross_replay_join_sig_as_exit_negative",
       "description": "A JOIN signature MUST NOT verify when presented against EXIT canonical bytes. This is the load-bearing op_type defense.",
       "canonical_bytes_under_test_hex": "4d58442d56414c2d563100014d33c191345773c1a9d30205e4ab821701b440e350e4a488828b92adb41c9e5600000194a50ed400",
+      "signature_under_test_hex": "8919a5c2b58bae5da36970128e12fad342b2d516693a48983e0ab07620e8d0102c97bcd7fdb8b0af2699f4d7599931511102c5f5901581d2163b70f45f7d7d0d",
+      "verify_expected": false,
+      "verify_actual": false
+    },
+    {
+      "name": "validator_evict_ed25519",
+      "description": "84-byte EVICT canonical bytes signed by the evictor (seed=0x42×32). Target derived from seed=0x37×32. Verifies as EVICT. Includes the 173-byte gossip wire payload with full byte-level breakdown.",
+      "canonical_signed_bytes_hex": "4d58442d56414c2d56310002bd8608bbc80ee14cb3c63c68f1e84d67040fb8625590f3033a9318f111633a8e4d33c191345773c1a9d30205e4ab821701b440e350e4a488828b92adb41c9e5600000194a50ed400",
+      "canonical_signed_bytes_breakdown": {
+        "domain_tag_11": "4d58442d56414c2d563100",
+        "op_type_1": "02",
+        "target_addr32_32": "bd8608bbc80ee14cb3c63c68f1e84d67040fb8625590f3033a9318f111633a8e",
+        "evictor_addr32_32": "4d33c191345773c1a9d30205e4ab821701b440e350e4a488828b92adb41c9e56",
+        "timestamp_be_8": "00000194a50ed400"
+      },
+      "signature_hex": "7f89a8ec3ad4c9a5c67023914949a139c0101bc1ec56704930cee3d923dd363a44ca6b5cf92659ef1c92e4c79d8a2d218e1e73cff9eed8351745df1cfc451c02",
+      "verify_evict_expected": true,
+      "verify_evict_actual": true,
+      "gossip_wire_payload_hex": "bd8608bbc80ee14cb3c63c68f1e84d67040fb8625590f3033a9318f111633a8e4d33c191345773c1a9d30205e4ab821701b440e350e4a488828b92adb41c9e560100202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db1200000194a50ed40000407f89a8ec3ad4c9a5c67023914949a139c0101bc1ec56704930cee3d923dd363a44ca6b5cf92659ef1c92e4c79d8a2d218e1e73cff9eed8351745df1cfc451c02",
+      "gossip_wire_payload_breakdown": {
+        "target_addr32_32": "bd8608bbc80ee14cb3c63c68f1e84d67040fb8625590f3033a9318f111633a8e",
+        "evictor_addr32_32": "4d33c191345773c1a9d30205e4ab821701b440e350e4a488828b92adb41c9e56",
+        "evictor_algo_id_1": "01",
+        "evictor_pk_len_be_2": "0020",
+        "evictor_pubkey_32": "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12",
+        "timestamp_be_8": "00000194a50ed400",
+        "sig_len_be_2": "0040",
+        "sig_64": "7f89a8ec3ad4c9a5c67023914949a139c0101bc1ec56704930cee3d923dd363a44ca6b5cf92659ef1c92e4c79d8a2d218e1e73cff9eed8351745df1cfc451c02"
+      },
+      "gossip_wire_payload_length": 173
+    },
+    {
+      "name": "cross_replay_join_sig_as_evict_negative",
+      "description": "A JOIN signature MUST NOT verify when presented against EVICT canonical bytes. The 52-byte JOIN bytes and 84-byte EVICT bytes have different lengths, but the load-bearing defense is the op_type byte at offset 11 — even if a future flow happens to align on length, the op_type still disambiguates.",
+      "canonical_bytes_under_test_hex": "4d58442d56414c2d56310002bd8608bbc80ee14cb3c63c68f1e84d67040fb8625590f3033a9318f111633a8e4d33c191345773c1a9d30205e4ab821701b440e350e4a488828b92adb41c9e5600000194a50ed400",
       "signature_under_test_hex": "8919a5c2b58bae5da36970128e12fad342b2d516693a48983e0ab07620e8d0102c97bcd7fdb8b0af2699f4d7599931511102c5f5901581d2163b70f45f7d7d0d",
       "verify_expected": false,
       "verify_actual": false
