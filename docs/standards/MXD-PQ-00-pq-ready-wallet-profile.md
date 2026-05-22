@@ -17,7 +17,7 @@ This profile is **non-binding** for MXD-00..04 conformance. A wallet implementin
 
 ## 2. Motivation
 
-MXD's external positioning includes the phrase "post-quantum cryptography" (see project README and `docs/HYBRID_CRYPTO.md`). The MXD-00..04 base specs deliberately make Ed25519 mandatory and Dilithium5 reserved, because the realistic ecosystem of integrators (MetaMask, exchanges, hardware wallets) cannot ship Dilithium5 today. This is the right choice for the base specs.
+MXD's external positioning includes the phrase "post-quantum cryptography" (see project README and `mxdlib/docs/HYBRID_CRYPTO.md`). The MXD-00..04 base specs deliberately make Ed25519 mandatory and Dilithium5 reserved, because the realistic ecosystem of integrators (MetaMask, exchanges, hardware wallets) cannot ship Dilithium5 today. This is the right choice for the base specs.
 
 But it creates a gap: a wallet can be fully MXD-conformant while being entirely classical, and an external reviewer cannot, from MXD-00..04 alone, verify any specific post-quantum property of the system.
 

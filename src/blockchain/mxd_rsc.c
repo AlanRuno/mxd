@@ -1227,6 +1227,16 @@ int mxd_process_validation_chain(mxd_block_t *block, mxd_validation_context_t *c
             mxd_propagate_supply_forward(block->height, block->total_supply);
         }
 
+        // Apply rapid_membership_entries to the in-memory rapid_table so a
+        // freshly-joined validator (per Phase 1/4 permissionless JOIN) becomes
+        // active immediately on every peer that finalizes the block. Without
+        // this, the rapid_table only refreshes on next process restart via
+        // mxd_rebuild_rapid_table_from_blockchain, and round-robin proposer
+        // selection keeps using the stale 5-validator view.
+        if (block->rapid_membership_count > 0) {
+            mxd_apply_membership_deltas((mxd_rapid_table_t *)table, block, NULL);
+        }
+
         // Check for validator eviction after storing block
         mxd_check_proposer_miss((mxd_rapid_table_t *)table, block);
 
@@ -1238,6 +1248,19 @@ int mxd_process_validation_chain(mxd_block_t *block, mxd_validation_context_t *c
         }
         mxd_compute_chain_scores((mxd_rapid_table_t *)table);
         mxd_sort_rapid_table_by_score((mxd_rapid_table_t *)table);
+
+        /* v8+: apply EVICT deltas LAST so the table modification (which
+         * shrinks the array and frees a node_stake_t) happens after all
+         * scoring + check_proposer_miss + sort routines that iterate the
+         * full table. Doing this earlier crashed testnet-0/1 (~12s after
+         * append) when the score-load step indexed into freed memory. */
+        if (block->version >= 8 && block->rapid_eviction_count > 0) {
+            MXD_LOG_INFO("rsc", "EVICT_DEBUG: before apply_eviction_deltas (count=%u table=%zu)",
+                         block->rapid_eviction_count, (size_t)table->count);
+            mxd_apply_eviction_deltas((mxd_rapid_table_t *)table, block, NULL);
+            MXD_LOG_INFO("rsc", "EVICT_DEBUG: after apply_eviction_deltas (table=%zu)",
+                         (size_t)table->count);
+        }
 
         return 0;
     }
@@ -1473,6 +1496,12 @@ int mxd_apply_membership_deltas(mxd_rapid_table_t *table, const mxd_block_t *blo
             // Get stake amount from UTXO balance
             table->nodes[table->count]->stake_amount = mxd_get_balance(entry->node_address);
             table->nodes[table->count]->active = 1;
+            // v8+: record when this validator was added so the EVICT
+            // grace-period check (§4.x) can protect freshly-joined nodes
+            // from being booted before their balance state has settled.
+            // entry->timestamp is the JOIN-request timestamp in ms (matches
+            // mxd_now_ms() origin in mxd_submit_validator_join_request).
+            table->nodes[table->count]->added_at_block_time_ms = entry->timestamp;
             // Initialize metrics with current time - this makes new/restored nodes
             // appear active. The last_update will be updated when validators sign blocks.
             mxd_init_node_metrics(&table->nodes[table->count]->metrics);
@@ -1493,6 +1522,53 @@ int mxd_apply_membership_deltas(mxd_rapid_table_t *table, const mxd_block_t *blo
         }
     }
     
+    return 0;
+}
+
+/* v8+: Apply rapid_eviction_entries from a finalized block to the in-memory
+ * rapid_table. For each entry, remove the target validator's slot if present.
+ * Idempotent: re-applying a block with the same evictions is a no-op once
+ * the target is gone. Returns 0 on success, -1 on null inputs. */
+int mxd_apply_eviction_deltas(mxd_rapid_table_t *table, const mxd_block_t *block,
+                              const char *local_node_id) {
+    (void)local_node_id;
+    if (!table || !block) return -1;
+    if (block->version < 8) return 0;
+    if (!block->rapid_eviction_entries || block->rapid_eviction_count == 0) return 0;
+
+    MXD_LOG_INFO("rsc", "EVICT_DEBUG: apply_eviction_deltas entered, count=%u table=%zu",
+                 block->rapid_eviction_count, (size_t)table->count);
+    for (uint32_t i = 0; i < block->rapid_eviction_count; i++) {
+        const mxd_rapid_eviction_entry_t *entry = &block->rapid_eviction_entries[i];
+        MXD_LOG_INFO("rsc", "EVICT_DEBUG: iter i=%u looking up target %02x%02x..%02x%02x",
+                     i, entry->target_addr[0], entry->target_addr[1],
+                     entry->target_addr[30], entry->target_addr[31]);
+        for (size_t j = 0; j < table->count; j++) {
+            if (table->nodes[j] &&
+                memcmp(table->nodes[j]->node_address, entry->target_addr, 32) == 0) {
+                MXD_LOG_INFO("rsc", "EVICT_DEBUG: match at j=%zu, table->count=%zu, freeing node",
+                             j, (size_t)table->count);
+                free(table->nodes[j]);
+                table->nodes[j] = NULL;
+                MXD_LOG_INFO("rsc", "EVICT_DEBUG: freed; shifting from k=%zu", j);
+                /* Compact: shift remaining slots down so the table is dense
+                 * and the round-robin index modulo table->count stays
+                 * coherent on every peer. */
+                for (size_t k = j; k + 1 < table->count; k++) {
+                    table->nodes[k] = table->nodes[k + 1];
+                }
+                table->nodes[table->count - 1] = NULL;
+                table->count--;
+                MXD_LOG_INFO("rsc", "EVICT_DEBUG: shifted; new table->count=%zu", (size_t)table->count);
+                MXD_LOG_INFO("rsc", "EVICT: removing validator %02x%02x...%02x%02x from rapid_table",
+                             entry->target_addr[0], entry->target_addr[1],
+                             entry->target_addr[30], entry->target_addr[31]);
+                break;
+            }
+        }
+    }
+    MXD_LOG_INFO("rsc", "EVICT_DEBUG: apply_eviction_deltas returning, final table=%zu",
+                 (size_t)table->count);
     return 0;
 }
 
@@ -3734,6 +3810,95 @@ int mxd_consensus_tick(mxd_rapid_table_t *table, const uint8_t *local_address,
             // Free the deep copy (SECURITY: Issue #3)
             free(requests);
         }
+
+        // v8+: Process pending validator EVICT requests. Mirror of the JOIN
+        // drain but with three extra admission rules: target must be in the
+        // CURRENT rapid_table, the eviction must not drop the table below
+        // the 4-validator floor (preserves K=⅔ quorum liveness for a
+        // 5-validator chain), and we tolerate self-EVICT (validator
+        // gracefully exiting).
+        if (current_block->version >= 8) {
+            mxd_validator_evict_request_t *evicts = NULL;
+            size_t evict_count = 0;
+            if (mxd_get_pending_evict_requests(&evicts, &evict_count) == 0 && evict_count > 0) {
+                MXD_LOG_INFO("rsc", "Processing %zu validator EVICT requests", evict_count);
+                /* current_block->total_supply is 0 at proposal-start time —
+                 * it's only computed during the finalize-path's
+                 * mxd_apply_block_transactions delta. Read the latest
+                 * finalized block's total_supply for the threshold check,
+                 * same convention as the JOIN-receive-handler bug fix. */
+                mxd_amount_t evict_supply = 0;
+                {
+                    uint32_t prev_h = (current_block->height > 0) ? (current_block->height - 1) : 0;
+                    mxd_block_t prev_block = {0};
+                    if (mxd_retrieve_block_by_height(prev_h, &prev_block) == 0) {
+                        evict_supply = prev_block.total_supply;
+                        mxd_free_block(&prev_block);
+                    }
+                }
+                for (size_t i = 0; i < evict_count; i++) {
+                    if (mxd_validate_evict_request(&evicts[i], table, evict_supply) != 0) {
+                        continue;
+                    }
+                    int target_in_set = 0;
+                    int evictor_in_set = 0;
+                    for (size_t j = 0; j < table->count; j++) {
+                        if (!table->nodes[j]) continue;
+                        if (memcmp(table->nodes[j]->node_address, evicts[i].target_addr, 32) == 0) {
+                            target_in_set = 1;
+                        }
+                        if (memcmp(table->nodes[j]->node_address, evicts[i].evictor_addr, 32) == 0) {
+                            evictor_in_set = 1;
+                        }
+                    }
+                    if (!target_in_set || !evictor_in_set) {
+                        continue;
+                    }
+                    /* Dedup by target: multiple validators racing to EVICT the
+                     * same target generate multiple gossip requests, but the
+                     * block only needs ONE entry per target (apply_eviction_deltas
+                     * removes the target once regardless). Skip if this target
+                     * is already represented by any earlier evictor in the block. */
+                    int target_already_in_block = 0;
+                    for (uint32_t k = 0; k < current_block->rapid_eviction_count; k++) {
+                        if (memcmp(current_block->rapid_eviction_entries[k].target_addr,
+                                   evicts[i].target_addr, 32) == 0) {
+                            target_already_in_block = 1;
+                            break;
+                        }
+                    }
+                    if (target_already_in_block) {
+                        continue;
+                    }
+                    /* 4-validator floor: count DISTINCT targets in the block's
+                     * eviction list + 1 for the new one, vs current rapid_table
+                     * size. Each target counts only once toward apply-time
+                     * removal even if multiple evictors signed it. */
+                    uint32_t distinct_targets = current_block->rapid_eviction_count + 1;
+                    uint32_t projected = (uint32_t)table->count - distinct_targets;
+                    if (projected < 4) {
+                        MXD_LOG_WARN("rsc", "EVICT skipped: 4-validator floor (projected=%u)", projected);
+                        continue;
+                    }
+                    if (mxd_append_eviction_entry(current_block,
+                                                  evicts[i].target_addr,
+                                                  evicts[i].evictor_addr,
+                                                  evicts[i].evictor_algo_id,
+                                                  evicts[i].evictor_public_key,
+                                                  evicts[i].evictor_public_key_length,
+                                                  evicts[i].signature,
+                                                  evicts[i].signature_length,
+                                                  evicts[i].timestamp) == 0) {
+                        MXD_LOG_INFO("rsc", "Added EVICT %02x%02x...%02x%02x (evictor=%02x%02x..%02x%02x) to block",
+                                     evicts[i].target_addr[0], evicts[i].target_addr[1],
+                                     evicts[i].target_addr[30], evicts[i].target_addr[31],
+                                     evicts[i].evictor_addr[0], evicts[i].evictor_addr[1],
+                                     evicts[i].evictor_addr[30], evicts[i].evictor_addr[31]);
+                    }
+                }
+                free(evicts);
+            }
+        }
     }
 
     // Check if block should be closed
@@ -3880,6 +4045,24 @@ int mxd_consensus_tick(mxd_rapid_table_t *table, const uint8_t *local_address,
         // Check eviction (own block — fallback proposer case)
         mxd_check_proposer_miss((mxd_rapid_table_t *)table, current_block);
 
+        /* Apply membership / eviction deltas to OUR OWN rapid_table so the
+         * proposer's view matches peers' immediately after publishing. Peers
+         * apply when they sync-receive the block (mxd_blockchain_sync.c).
+         * For EVICT: apply LAST (after scoring + sort) so those routines see
+         * the pre-eviction table; the next consensus tick picks up the new
+         * smaller table for proposer-index computation. */
+        if (current_block->rapid_membership_count > 0) {
+            mxd_apply_membership_deltas((mxd_rapid_table_t *)table, current_block, NULL);
+        }
+        if (current_block->version >= 8 && current_block->rapid_eviction_count > 0) {
+            mxd_apply_eviction_deltas((mxd_rapid_table_t *)table, current_block, NULL);
+        }
+        /* Clear processed JOIN + EVICT pool entries (see sync.c comment). */
+        if (current_block->rapid_membership_count > 0 ||
+            (current_block->version >= 8 && current_block->rapid_eviction_count > 0)) {
+            mxd_clear_processed_requests(current_block);
+        }
+
         // Register active validation for skip timeout monitoring.
         // Initialize the file-scope validation context so it outlives mxd_stop_block_proposal().
         {
@@ -3910,9 +4093,25 @@ int mxd_consensus_tick(mxd_rapid_table_t *table, const uint8_t *local_address,
         finalize_ok = 1;
 
     block_finalize_cleanup:
-        // Always stop the proposal after close_block to prevent permanent stall
-        // NOTE: This frees the block. The skip timeout will only operate while
-        // g_active_val_block is still valid (cleared on finalization).
+        /* BUG FIX (Phase 3 debug): the skip-timeout code at line ~4121
+         * dereferences g_active_val_block->validation_chain[sv]. If we call
+         * mxd_stop_block_proposal() first, that block is freed and the next
+         * skip-timeout tick reads freed memory → SIGSEGV in memcmp. Clear
+         * the validation-tracking globals BEFORE the free.
+         *
+         * Pre-Phase-3 this was a latent bug because the skip-timeout window
+         * was narrow (close_block → next consensus tick is ~5s) and rarely
+         * coincided with a sign timeout. v8 EVICT activity made it
+         * reproducible by extending the time between close and first sig. */
+        pthread_mutex_lock(&g_active_val_mutex);
+        g_active_val_ctx = NULL;
+        g_active_val_block = NULL;
+        g_active_val_table = NULL;
+        pthread_mutex_unlock(&g_active_val_mutex);
+
+        // Always stop the proposal after close_block to prevent permanent stall.
+        // This frees current_block and its rapid_membership/rapid_eviction
+        // entries. The skip-timeout globals are now safely NULL.
         mxd_stop_block_proposal();
 
         return finalize_ok ? 1 : -1;

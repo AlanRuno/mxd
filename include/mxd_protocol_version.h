@@ -24,6 +24,12 @@ extern "C" {
  *       prefixed to validator/p2p/bridge/consensus signed payloads, P2P
  *       handshake protocol_version bumped 5->6. Wire-format-breaking;
  *       requires fresh genesis on all networks.
+ * - v8: peer-driven validator EVICTION (Phase 3 of permissionless
+ *       validator-management). Block layout gains a
+ *       rapid_eviction_entries[] field; pre-v8 blocks ignore it.
+ *       Wire-format-breaking — bump requires either fresh genesis or a
+ *       coordinated activation_height after which proposers begin
+ *       emitting v8 blocks.
  */
 
 #define MXD_PROTOCOL_VERSION_1 1
@@ -33,8 +39,9 @@ extern "C" {
 #define MXD_PROTOCOL_VERSION_5 5
 #define MXD_PROTOCOL_VERSION_6 6
 #define MXD_PROTOCOL_VERSION_7 7
+#define MXD_PROTOCOL_VERSION_8 8
 
-#define MXD_CURRENT_PROTOCOL_VERSION MXD_PROTOCOL_VERSION_7
+#define MXD_CURRENT_PROTOCOL_VERSION MXD_PROTOCOL_VERSION_8
 
 // Activation heights for protocol upgrades
 // These define when new protocol versions become mandatory
@@ -45,6 +52,7 @@ typedef struct {
     uint32_t v5_activation_height;  // Deterministic proposer + finalization gate + skip timeout
     uint32_t v6_activation_height;  // addr32 validator identity (block-format change)
     uint32_t v7_activation_height;  // Domain-tag cascade + SHA-512 chain_id (wire-format change)
+    uint32_t v8_activation_height;  // Peer-driven EVICT block field (Phase 3 validator-mgmt)
 } mxd_activation_heights_t;
 
 // Network-specific activation heights
@@ -67,7 +75,7 @@ mxd_activation_heights_t mxd_get_activation_heights(mxd_network_type_t network);
  *
  * @param height Block height
  * @param network Network type
- * @return Required protocol version (1..7)
+ * @return Required protocol version (1..8)
  */
 uint32_t mxd_get_required_protocol_version(uint32_t height, mxd_network_type_t network);
 

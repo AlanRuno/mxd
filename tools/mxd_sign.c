@@ -20,12 +20,11 @@
  *   pubkey        (pubkey_len bytes)
  *   privkey       (privkey_len bytes)
  *
- * Build (after building libmxd.so via the top-level CMake):
+ * Build (assumes libmxd.so available, e.g. on a configured node):
  *   gcc -O2 -o mxd_sign mxd_sign.c \
- *       -I../include \
- *       -L../build/lib -lmxd \
- *       -Wl,-rpath,../build/lib
- * Or install libmxd.so to /usr/local/lib and link with -lmxd directly.
+ *       -I/opt/mxd/include \
+ *       -L/opt/mxd/build/lib -lmxd \
+ *       -Wl,-rpath,/opt/mxd/build/lib
  */
 
 #include <stdio.h>

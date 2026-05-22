@@ -127,8 +127,15 @@ int mxd_get_next_validator(const mxd_block_t *block, const mxd_rapid_table_t *ta
 int mxd_process_validation_chain(mxd_block_t *block, mxd_validation_context_t *context,
                                 const mxd_rapid_table_t *table);
 
-int mxd_apply_membership_deltas(mxd_rapid_table_t *table, const mxd_block_t *block, 
+int mxd_apply_membership_deltas(mxd_rapid_table_t *table, const mxd_block_t *block,
                                 const char *local_node_id);
+
+// v8+: apply rapid_eviction_entries from a finalized block to the in-memory
+// rapid_table. Removes each target validator's slot and compacts the table
+// so round-robin proposer selection (height_hash % table->count) stays
+// coherent across peers immediately after the block applies.
+int mxd_apply_eviction_deltas(mxd_rapid_table_t *table, const mxd_block_t *block,
+                              const char *local_node_id);
 
 int mxd_remove_expired_nodes(mxd_rapid_table_t *table, uint64_t current_time);
 

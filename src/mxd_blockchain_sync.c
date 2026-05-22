@@ -349,6 +349,29 @@ void mxd_handle_blocks_response(const uint8_t *data, size_t data_len, uint32_t b
             extern void mxd_set_finalized_height_external(uint32_t height);
             mxd_set_finalized_height_external(block.height);
 
+            /* Apply membership / eviction deltas to the in-memory rapid_table
+             * so JOIN / EVICT take effect immediately. mxd_process_validation_chain
+             * (mxd_rsc.c:1103) has the same calls but is dead code — has no
+             * callers. Without applying here, peers receive the block via gossip,
+             * store it, but their in-memory rapid_table stays stale until the next
+             * process restart triggers mxd_rebuild_rapid_table_from_blockchain. */
+            if (block.rapid_membership_count > 0) {
+                const mxd_rapid_table_t *t = mxd_get_rapid_table();
+                if (t) mxd_apply_membership_deltas((mxd_rapid_table_t *)t, &block, NULL);
+            }
+            if (block.version >= 8 && block.rapid_eviction_count > 0) {
+                const mxd_rapid_table_t *t = mxd_get_rapid_table();
+                if (t) mxd_apply_eviction_deltas((mxd_rapid_table_t *)t, &block, NULL);
+            }
+            /* Clear processed entries from the JOIN + EVICT pools so a
+             * future rejoin+redrain cycle isn't blocked by stale dedup
+             * fingerprints (see mxd_validator_management.c::mxd_clear_processed_requests). */
+            if (block.rapid_membership_count > 0 ||
+                (block.version >= 8 && block.rapid_eviction_count > 0)) {
+                extern int mxd_clear_processed_requests(const mxd_block_t *block);
+                mxd_clear_processed_requests(&block);
+            }
+
             // Forward-propagate supply to any subsequent blocks stored with supply=0
             if (block.total_supply > 0) {
                 mxd_propagate_supply_forward(block.height, block.total_supply);
@@ -913,6 +936,24 @@ static int mxd_sync_block_range(uint32_t start_height, uint32_t end_height) {
         // Update finalization tracking so proposer can proceed
         extern void mxd_set_finalized_height_external(uint32_t height);
         mxd_set_finalized_height_external(block->height);
+
+        /* Apply membership / eviction deltas (same fix as unsolicited path
+         * above) so JOIN / EVICT take effect immediately on bulk-synced
+         * blocks. */
+        if (block->rapid_membership_count > 0) {
+            const mxd_rapid_table_t *t = mxd_get_rapid_table();
+            if (t) mxd_apply_membership_deltas((mxd_rapid_table_t *)t, block, NULL);
+        }
+        if (block->version >= 8 && block->rapid_eviction_count > 0) {
+            const mxd_rapid_table_t *t = mxd_get_rapid_table();
+            if (t) mxd_apply_eviction_deltas((mxd_rapid_table_t *)t, block, NULL);
+        }
+        /* Clear processed pool entries (see unsolicited-path comment). */
+        if (block->rapid_membership_count > 0 ||
+            (block->version >= 8 && block->rapid_eviction_count > 0)) {
+            extern int mxd_clear_processed_requests(const mxd_block_t *block);
+            mxd_clear_processed_requests(block);
+        }
 
         // Load validator scores from synced block into rapid table
         // so subsequent blocks can validate correctly

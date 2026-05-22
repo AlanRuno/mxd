@@ -138,7 +138,7 @@ On all validations passing, the node proceeds to construct and broadcast a `brid
 
 ### 6.1 Oracle allowlist configuration
 
-The node's `bridge_oracle_pubkeys` allowlist is configured at start-up (per `include/mxd_config.h`'s `http.bridge_oracle_pubkeys` array). The allowlist is **not** drawn from the validator set — bridge oracles are a separate role from block-producing validators, and conflating them would conflate trust models. Operational policy MAY establish a single physical operator running both an oracle and a validator, but the cryptographic identities (and therefore the keypairs) MUST remain distinct because the spec layers (MXD-API-01 vs. MXD-CONS-01) bind to different domain tags.
+The node's `bridge_oracle_pubkeys` allowlist is configured at start-up (per `mxdlib/include/mxd_config.h`'s `http.bridge_oracle_pubkeys` array). The allowlist is **not** drawn from the validator set — bridge oracles are a separate role from block-producing validators, and conflating them would conflate trust models. Operational policy MAY establish a single physical operator running both an oracle and a validator, but the cryptographic identities (and therefore the keypairs) MUST remain distinct because the spec layers (MXD-API-01 vs. MXD-CONS-01) bind to different domain tags.
 
 ## 7. BSC-side requirements (informative)
 
@@ -202,9 +202,9 @@ The v7 cutover is a one-shot wire flip; the oracle and the node must redeploy to
 - **MXD-00**: Standards Index. The Domain-Tag Registry where `"MXD-BRG-V1\0"` is registered.
 - **AUDIT_2026-04-29_v5.md** finding **C5-1**: motivated the `mxd_chain_id` field and the cross-chain replay defense.
 - **AUDIT_2026-05-05_v6.md** findings **M6-1** (SHA-512 chain_id and 220-byte canonical message) and **L6-3** (algo_id binding).
-- Reference implementation (node): `src/mxd_http_api.c`, `handle_bridge_submit` (~line 1080) and the canonical-message reconstruction (~line 1257).
-- Reference implementation (chain id): `src/mxd_transaction.c`, `mxd_get_chain_id` (~line 1715).
-- Reference oracle implementation: maintained out-of-tree by the operator. Anyone implementing an oracle SHOULD follow the canonical-message construction in §6 exactly; node validation is the authoritative gate and rejects mismatches regardless of the producer.
+- Reference implementation (node): `mxdlib/src/mxd_http_api.c`, `handle_bridge_submit` (~line 1080) and the canonical-message reconstruction (~line 1257).
+- Reference implementation (chain id): `mxdlib/src/mxd_transaction.c`, `mxd_get_chain_id` (~line 1715).
+- Reference implementation (oracle): `mxd-bridge-oracle/src/utils/mxd-signer.js`, `signBridgeMintTransaction` (~line 39); `mxd-bridge-oracle/src/monitors/bnb-monitor.js`, the `/bridge/submit` POST builder (~line 813).
 
 ## 11. Change log
 

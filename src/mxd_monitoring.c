@@ -554,6 +554,9 @@ const char* mxd_get_block_json(uint32_t height) {
     cJSON_AddNumberToObject(root, "nonce", (double)block.nonce);
     cJSON_AddNumberToObject(root, "validation_count", block.validation_count);
     cJSON_AddNumberToObject(root, "rapid_membership_count", block.rapid_membership_count);
+    if (block.version >= 8) {
+        cJSON_AddNumberToObject(root, "rapid_eviction_count", block.rapid_eviction_count);
+    }
     cJSON_AddNumberToObject(root, "transaction_count", block.transaction_count);
     cJSON_AddNumberToObject(root, "total_supply", (double)block.total_supply);
 

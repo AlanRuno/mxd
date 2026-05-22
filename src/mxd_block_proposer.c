@@ -292,6 +292,12 @@ int mxd_stop_block_proposal(void) {
             free(proposer_state.current_block->rapid_membership_entries);
         }
 
+        /* v8+: also free rapid_eviction_entries to avoid a per-proposal leak
+         * when EVICT entries land in a proposed block. */
+        if (proposer_state.current_block->rapid_eviction_entries) {
+            free(proposer_state.current_block->rapid_eviction_entries);
+        }
+
         if (proposer_state.current_block->validator_scores) {
             free(proposer_state.current_block->validator_scores);
         }

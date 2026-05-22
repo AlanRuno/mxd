@@ -7,9 +7,7 @@
     "initial_stake": 120.0,
     "preferred_sign_algo": 1,
     "bootstrap_nodes": [
-        "bootstrap1.mxd.network:8000",
-        "bootstrap2.mxd.network:8000",
-        "bootstrap3.mxd.network:8000"
+        "34.31.52.198:8000"
     ],
     "metrics": {
         "update_interval": 1000,

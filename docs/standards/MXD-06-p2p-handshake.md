@@ -173,7 +173,7 @@ The handshake explicitly rejects unknown `algo_id` values and length-mismatched 
 - **MXD-03**: Signing & Verification. The Ed25519 and Dilithium5 primitives, the disjoint-domain rule of §7, and the length-validation regime of §6.
 - **MXD-00**: Standards Index. The Domain-Tag Registry where `"MXD-P2P-V1\0"` is registered.
 - **AUDIT_2026-05-05_v6.md** finding **L6-5**: motivated the protocol_version bump and the addition of the MXD-P2P-V1 domain tag.
-- Reference implementation: `src/mxd_p2p.c`, in particular the `create_signed_handshake` function (~line 1242) and the `handle_handshake_message` verify path (~line 1352) — the byte layouts at lines 1274–1282 (sign) and 1440–1448 (verify) are the normative source.
+- Reference implementation: `mxdlib/src/mxd_p2p.c`, in particular the `create_signed_handshake` function (~line 1242) and the `handle_handshake_message` verify path (~line 1352) — the byte layouts at lines 1274–1282 (sign) and 1440–1448 (verify) are the normative source.
 
 ## 11. Change log
 

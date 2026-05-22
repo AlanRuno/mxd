@@ -160,6 +160,261 @@ static void *consensus_thread_func(void *arg) {
     return NULL;
 }
 
+/* ======================================================================
+ * Phase 4 — Auto-JOIN trigger.
+ *
+ * Periodically checks whether this node should submit a validator JOIN
+ * request. Triggers iff ALL of the following hold:
+ *   - chain is past genesis (blockchain_height >= 1)
+ *   - rapid_table is initialized and ready
+ *   - self is NOT in the active validator set
+ *   - on-chain balance for self_addr >= total_supply / 1000 (0.10 % stake)
+ *
+ * On match: calls mxd_submit_validator_join_request which signs the 52-byte
+ * canonical message, adds to the local request pool, and broadcasts via
+ * MXD_MSG_VALIDATOR_JOIN_REQUEST (the Phase 1+2 P2P plumbing). The pool
+ * already feeds the block proposer at mxd_rsc.c, so once any proposer
+ * receives the gossip the JOIN will land in rapid_membership_entries of
+ * its next proposed block.
+ *
+ * Anti-spam: after a successful submission we set submitted_at to suppress
+ * repeated submissions until either (a) we observe ourselves in the active
+ * set (success) or (b) 5 minutes elapse (the timestamp window enforced by
+ * mxd_validate_join_request, after which the original signature expires
+ * and re-submission is required).
+ * ====================================================================== */
+
+#include "../../include/mxd_validator_management.h"
+#include "../include/mxd_protocol_version.h"
+#include "../../include/mxd_utxo.h"
+
+static int auto_join_running = 1;
+
+static void *auto_join_thread_func(void *arg) {
+    (void)arg;
+    uint64_t last_submit_ms = 0;
+    /* Brief warm-up: wait for the node to settle (sync from peers, finalize
+     * the genesis block locally, initialize the rapid table). 30 seconds
+     * is generous — the consensus thread typically converges much faster. */
+    sleep(30);
+    while (auto_join_running && keep_running) {
+        sleep(60); /* 60s polling cadence */
+
+        uint32_t blockchain_height = 0;
+        mxd_get_blockchain_height(&blockchain_height);
+        if (blockchain_height < 1 || !rapid_table_ready) continue;
+
+        /* Skip if our addr32 is all-zero — the node-keys load failed earlier
+         * and there is nothing to sign with. */
+        uint8_t zero[32] = {0};
+        if (memcmp(node_address, zero, 32) == 0) continue;
+
+        /* Already in the active set? */
+        pthread_mutex_lock(&metrics_mutex);
+        int in_set = 0;
+        for (size_t i = 0; i < rapid_table.count; i++) {
+            if (rapid_table.nodes[i] &&
+                memcmp(rapid_table.nodes[i]->node_address, node_address, 32) == 0) {
+                in_set = 1; break;
+            }
+        }
+        pthread_mutex_unlock(&metrics_mutex);
+        if (in_set) {
+            /* Stable state — already a validator. Reset the JOIN cooldown so
+             * a future drop-out can retry quickly. */
+            last_submit_ms = 0;
+
+            /* v8+: while we're in the set, scan OTHER validators for ones
+             * whose balance has fallen below the §4.4 stake threshold and
+             * sign+broadcast an EVICT. This is the auto-EVICT trigger,
+             * integrated into the proven-working auto-join thread instead of
+             * a separate thread. Gated on v8 activation. */
+            if (mxd_get_required_protocol_version(blockchain_height,
+                                                  mxd_get_network_type()) >= MXD_PROTOCOL_VERSION_8) {
+                mxd_block_t lb = {0};
+                if (mxd_retrieve_block_by_height(blockchain_height - 1, &lb) == 0) {
+                    mxd_amount_t s = lb.total_supply;
+                    mxd_free_block(&lb);
+                    if (s > 0) {
+                        mxd_amount_t threshold = s / 1000ULL;
+                        /* Snapshot OTHER validators' addr32 under lock. */
+                        uint8_t targets[64][32];
+                        size_t tc = 0;
+                        pthread_mutex_lock(&metrics_mutex);
+                        for (size_t k = 0; k < rapid_table.count && tc < 64; k++) {
+                            if (!rapid_table.nodes[k]) continue;
+                            if (memcmp(rapid_table.nodes[k]->node_address, node_address, 32) == 0) continue;
+                            memcpy(targets[tc++], rapid_table.nodes[k]->node_address, 32);
+                        }
+                        pthread_mutex_unlock(&metrics_mutex);
+                        size_t pkl = mxd_sig_pubkey_len(node_algo_id);
+                        for (size_t k = 0; k < tc; k++) {
+                            mxd_amount_t bal = mxd_get_balance(targets[k]);
+                            if (bal >= threshold) continue;
+                            MXD_LOG_INFO("auto-evict",
+                                         "Submitting EVICT for target %02x%02x..%02x%02x (balance %llu < threshold %llu)",
+                                         targets[k][0], targets[k][1], targets[k][30], targets[k][31],
+                                         (unsigned long long)bal, (unsigned long long)threshold);
+                            mxd_submit_validator_evict_with_pubkey(targets[k], node_address,
+                                                                    node_algo_id, node_pubkey,
+                                                                    (uint16_t)pkl, node_privkey);
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
+        /* Cooldown: don't resubmit within the 5-min signature-validity window. */
+        uint64_t now_ms = mxd_now_ms();
+        if (last_submit_ms != 0 && (now_ms - last_submit_ms) < 300000ULL) continue;
+
+        /* Look up current total_supply by reading the latest finalized block. */
+        mxd_block_t latest_block = {0};
+        if (mxd_retrieve_block_by_height(blockchain_height - 1, &latest_block) != 0) {
+            /* Brand-new chain may not have blocks yet; retry next tick. */
+            continue;
+        }
+        mxd_amount_t supply = latest_block.total_supply;
+        mxd_free_block(&latest_block);
+        if (supply == 0) continue;
+
+        /* Stake check: balance must meet 0.10 % of total_supply. */
+        mxd_amount_t my_balance = mxd_get_balance(node_address);
+        mxd_amount_t threshold = supply / 1000ULL;
+        if (my_balance < threshold) {
+            MXD_LOG_INFO("auto-join",
+                         "Skipping JOIN: balance %llu < threshold %llu (0.10%% of supply %llu)",
+                         (unsigned long long)my_balance,
+                         (unsigned long long)threshold,
+                         (unsigned long long)supply);
+            continue;
+        }
+
+        /* Eligible — submit. */
+        size_t pk_len = mxd_sig_pubkey_len(node_algo_id);
+        MXD_LOG_INFO("auto-join",
+                     "Submitting validator JOIN (balance %llu MXD-base, threshold %llu, supply %llu)",
+                     (unsigned long long)my_balance,
+                     (unsigned long long)threshold,
+                     (unsigned long long)supply);
+        if (mxd_submit_validator_join_request(node_address, node_pubkey,
+                                              (uint16_t)pk_len, node_algo_id,
+                                              node_privkey) == 0) {
+            last_submit_ms = now_ms;
+        }
+    }
+    return NULL;
+}
+
+/* v8+: auto-EVICT trigger thread. Each active validator scans every OTHER
+ * validator in the rapid_table; if any has balance < total_supply/1000, sign
+ * and broadcast an EVICT request. Cadence + warm-up mirror the JOIN thread
+ * (60s poll, 30s warm-up). Per-(evictor, target) 5-min cooldown to avoid
+ * spamming the gossip layer with the same EVICT every tick. */
+static int auto_evict_running = 1;
+static pthread_t auto_evict_tid;
+
+#define MAX_EVICT_COOLDOWN_ENTRIES 64
+typedef struct {
+    uint8_t target_addr[32];
+    uint64_t last_submit_ms;
+} auto_evict_cooldown_t;
+
+static void *auto_evict_thread_func(void *arg) {
+    (void)arg;
+    auto_evict_cooldown_t cooldowns[MAX_EVICT_COOLDOWN_ENTRIES];
+    memset(cooldowns, 0, sizeof(cooldowns));
+    size_t cooldown_count = 0;
+
+    sleep(30);  /* warm-up */
+    while (auto_evict_running && keep_running) {
+        sleep(60);
+
+        uint32_t blockchain_height = 0;
+        mxd_get_blockchain_height(&blockchain_height);
+        if (blockchain_height < 1 || !rapid_table_ready) continue;
+
+        /* v8 activation gate */
+        if (mxd_get_required_protocol_version(blockchain_height,
+                                              mxd_get_network_type()) < MXD_PROTOCOL_VERSION_8) {
+            continue;
+        }
+
+        /* Local node must be an active validator to submit EVICTs. */
+        uint8_t zero[32] = {0};
+        if (memcmp(node_address, zero, 32) == 0) continue;
+        pthread_mutex_lock(&metrics_mutex);
+        int local_in_set = 0;
+        for (size_t i = 0; i < rapid_table.count; i++) {
+            if (rapid_table.nodes[i] &&
+                memcmp(rapid_table.nodes[i]->node_address, node_address, 32) == 0) {
+                local_in_set = 1; break;
+            }
+        }
+        pthread_mutex_unlock(&metrics_mutex);
+        if (!local_in_set) continue;
+
+        /* Read total_supply from latest finalized block. */
+        mxd_block_t latest_block = {0};
+        if (mxd_retrieve_block_by_height(blockchain_height - 1, &latest_block) != 0) {
+            continue;
+        }
+        mxd_amount_t supply = latest_block.total_supply;
+        mxd_free_block(&latest_block);
+        if (supply == 0) continue;
+        mxd_amount_t threshold = supply / 1000ULL;
+
+        /* Snapshot the addresses to inspect (under lock) then release. */
+        uint8_t targets[64][32];
+        size_t target_count = 0;
+        pthread_mutex_lock(&metrics_mutex);
+        for (size_t i = 0; i < rapid_table.count && target_count < 64; i++) {
+            if (!rapid_table.nodes[i]) continue;
+            /* Skip self — graceful self-EVICT is allowed via the API but the
+             * auto-trigger only acts on OTHERS, so a validator with a
+             * fluctuating balance doesn't accidentally evict itself. */
+            if (memcmp(rapid_table.nodes[i]->node_address, node_address, 32) == 0) continue;
+            memcpy(targets[target_count++], rapid_table.nodes[i]->node_address, 32);
+        }
+        pthread_mutex_unlock(&metrics_mutex);
+
+        uint64_t now_ms = mxd_now_ms();
+        size_t pk_len = mxd_sig_pubkey_len(node_algo_id);
+        for (size_t i = 0; i < target_count; i++) {
+            mxd_amount_t target_balance = mxd_get_balance(targets[i]);
+            if (target_balance >= threshold) continue;
+
+            /* Per-target cooldown. */
+            int skip = 0;
+            for (size_t j = 0; j < cooldown_count; j++) {
+                if (memcmp(cooldowns[j].target_addr, targets[i], 32) == 0) {
+                    if (now_ms - cooldowns[j].last_submit_ms < 300000ULL) {
+                        skip = 1;
+                    } else {
+                        cooldowns[j].last_submit_ms = now_ms;
+                    }
+                    break;
+                }
+            }
+            if (skip) continue;
+            if (cooldown_count < MAX_EVICT_COOLDOWN_ENTRIES) {
+                memcpy(cooldowns[cooldown_count].target_addr, targets[i], 32);
+                cooldowns[cooldown_count].last_submit_ms = now_ms;
+                cooldown_count++;
+            }
+
+            MXD_LOG_INFO("auto-evict",
+                         "Submitting EVICT for target %02x%02x...%02x%02x (balance %llu < threshold %llu)",
+                         targets[i][0], targets[i][1], targets[i][30], targets[i][31],
+                         (unsigned long long)target_balance, (unsigned long long)threshold);
+            mxd_submit_validator_evict_with_pubkey(targets[i], node_address, node_algo_id,
+                                                    node_pubkey, (uint16_t)pk_len, node_privkey);
+        }
+    }
+    return NULL;
+}
+
 void* upnp_nat_thread(void* arg) {
     MXD_LOG_INFO("node", "Starting UPnP NAT traversal in background thread...");
     if (mxd_dht_enable_nat_traversal() == 0) {
@@ -589,6 +844,30 @@ int main(int argc, char** argv) {
         return 1;
     }
     MXD_LOG_INFO("node", "Consensus thread started (200ms tick interval)");
+
+    // Phase 4 — Auto-JOIN trigger thread (60s polling, signs+broadcasts a
+    // validator JOIN request when self meets the 0.10 %-of-supply stake
+    // threshold and is not already in the active set).
+    pthread_t auto_join_tid;
+    if (pthread_create(&auto_join_tid, NULL, auto_join_thread_func, NULL) != 0) {
+        MXD_LOG_WARN("node", "Failed to start auto-join thread (validator JOIN must be triggered manually)");
+    } else {
+        MXD_LOG_INFO("node", "Auto-join thread started (60s polling, 30s warm-up)");
+    }
+
+    /* v8+: auto-EVICT thread. DISABLED pending crash debug — the thread's
+     * rapid_table scan was racing with the consensus tick's table writes
+     * (suspected; not confirmed). Re-enable once locking is corrected. */
+#if 0
+    if (pthread_create(&auto_evict_tid, NULL, auto_evict_thread_func, NULL) != 0) {
+        MXD_LOG_WARN("node", "Failed to start auto-evict thread");
+    } else {
+        MXD_LOG_INFO("node", "Auto-evict thread started (60s polling, 30s warm-up, v8 gated)");
+    }
+#else
+    (void)auto_evict_tid;
+    MXD_LOG_INFO("node", "Auto-evict thread DISABLED (crash debug — see CONSENSUS_V5 v8 appendix)");
+#endif
 
     MXD_LOG_INFO("node", "Node started successfully, entering display loop");
 

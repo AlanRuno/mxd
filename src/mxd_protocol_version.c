@@ -11,13 +11,20 @@ static mxd_network_type_t current_network = MXD_NETWORK_TESTNET;
 // Note: v6 (addr32 validator identity, block-format change) and v7 (domain-tag
 // cascade + SHA-512 chain_id) each require a fresh-genesis restart on all
 // networks because the wire format changes.
+// v8 is the Phase 3 EVICT block-field. Mainnet is gated FUTURE — operators
+// MUST replace UINT32_MAX with a coordinated activation height ≥ current_tip
+// + ~1000 blocks before deploying the v8 binary. Until that's set, mainnet
+// proposers continue producing v7 blocks and v8 EVICT entries are not
+// emitted (the wire format stays backwards-compatible). Testnet and devnet
+// run v8 from genesis.
 static const mxd_activation_heights_t MAINNET_HEIGHTS = {
     .v2_activation_height = 0,       // v2 from genesis (fresh mainnet)
     .v3_activation_height = 0,       // v3 from genesis (bridge support from block 0)
     .v4_activation_height = 0,       // v4 from genesis (on-chain validator scoring)
     .v5_activation_height = 0,       // v5 from genesis
     .v6_activation_height = 0,       // v6 from genesis (addr32 identity migration)
-    .v7_activation_height = 0        // v7 from genesis (domain-tag cascade)
+    .v7_activation_height = 0,       // v7 from genesis (domain-tag cascade)
+    .v8_activation_height = UINT32_MAX  // v8 gated — operator sets before deploy
 };
 
 static const mxd_activation_heights_t TESTNET_HEIGHTS = {
@@ -26,7 +33,8 @@ static const mxd_activation_heights_t TESTNET_HEIGHTS = {
     .v4_activation_height = 0,       // v4 from genesis (fresh testnet deploy)
     .v5_activation_height = 0,       // v5 from genesis on fresh testnet
     .v6_activation_height = 0,       // v6 from genesis on fresh testnet
-    .v7_activation_height = 0        // v7 from genesis on fresh testnet
+    .v7_activation_height = 0,       // v7 from genesis on fresh testnet
+    .v8_activation_height = 55       // v8 retry: integrated auto-EVICT into auto-join thread (chain at h=48; 7 blocks margin)
 };
 
 static const mxd_activation_heights_t DEVNET_HEIGHTS = {
@@ -35,7 +43,8 @@ static const mxd_activation_heights_t DEVNET_HEIGHTS = {
     .v4_activation_height = 0,       // v4 from genesis (for development)
     .v5_activation_height = 0,       // v5 from genesis (for development)
     .v6_activation_height = 0,       // v6 from genesis (for development)
-    .v7_activation_height = 0        // v7 from genesis (for development)
+    .v7_activation_height = 0,       // v7 from genesis (for development)
+    .v8_activation_height = 0        // v8 from genesis (for development)
 };
 
 // Get activation heights for a specific network
@@ -59,7 +68,9 @@ uint32_t mxd_get_required_protocol_version(uint32_t height, mxd_network_type_t n
     mxd_activation_heights_t heights = mxd_get_activation_heights(network);
 
     // Determine version based on activation heights (highest first)
-    if (height >= heights.v7_activation_height) {
+    if (height >= heights.v8_activation_height) {
+        return MXD_PROTOCOL_VERSION_8;
+    } else if (height >= heights.v7_activation_height) {
         return MXD_PROTOCOL_VERSION_7;
     } else if (height >= heights.v6_activation_height) {
         return MXD_PROTOCOL_VERSION_6;

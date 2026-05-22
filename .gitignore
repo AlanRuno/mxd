@@ -1,56 +1,50 @@
-# Build artifacts
+# Build directory
 build/
-build-*/
-out/
-*.o
-*.a
-*.so
-*.so.*
-*.dylib
-*.dll
-*.exe
 
-# Validator runtime data — never check in
-data/
-*.db/
-node_keys.v2
+# WebAssembly files
+*.wasm
+*.wat
 
-# Local environment / secrets
-.env
-.env.*
-!.env.example
+# Generated headers
+# Note: wasm_binary.h is now tracked in tests/ directory
 
-# Editor / OS
+# External dependencies
+wasm3/
+
+# IDE files
 .vscode/
 .idea/
-*.swp
+.vs/
+
+# Secrets and environment files
+.env
+*.env
+contracts/.env
+!*.env.example
+
+# OS files
 .DS_Store
 Thumbs.db
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
-
-# Solidity / Hardhat
-contracts/node_modules/
-contracts/artifacts/
-contracts/cache/
-contracts/coverage/
-contracts/typechain-types/
-
-# CMake
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-Makefile
-compile_commands.json
-
-# Logs
-*.log
-logs/
-
-# Test outputs
-*.profraw
-coverage/
+/build-test
+/build_remote
+/build_tmp
+contract_implementations.tar.gz
+contract_implementations_fixed.tar.gz
+CONTRACT_STORAGE_IMPLEMENTATION.md
+CRITICAL_VALIDATOR_SET_BUG_ANALYSIS.md
+/deployment
+libmxd_latest.so
+MEDIUM_FIXES_APPLIED.md
+mxd_node_latest
+NDH6SA~M
+POST_FIX_SECURITY_ASSESSMENT.md
+SECURITY_AUDIT_REPORT.md
+SECURITY_AUDIT_VALIDATOR_MANAGEMENT.md
+SECURITY_FIXES_APPLIED.md
+SECURITY_STATUS.md
+src/NDH6SA~M
+TEST_RESULTS.md
+TESTING_GUIDE.md
+/testnet
+/tests
+.worktrees/

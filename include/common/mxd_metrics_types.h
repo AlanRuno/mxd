@@ -40,6 +40,10 @@ typedef struct {
     uint64_t total_latency_ms;     // Cumulative (sig_timestamp - block_timestamp) for latency avg
     uint32_t blocks_since_joined;  // Number of blocks processed since this node joined the table
     uint64_t chain_score;          // Deterministic composite score (0-10000)
+    uint64_t added_at_block_time_ms;  // v8+: block timestamp (ms) when this node was added to
+                                      // the rapid_table. Used by the EVICT grace-period rule —
+                                      // a node added within the last 5 min is protected. 0 for
+                                      // genesis validators (no grace needed, they've always been here).
 } mxd_node_stake_t;
 
 #ifdef __cplusplus

@@ -207,7 +207,7 @@ None of these are in scope for v7.x. Validators that double-sign today are toler
 
 ## 9. Soak validation (informative)
 
-The reorg implementation was validated on a 5-node testnet with a 16-hour soak driving 1 user transaction every 10 minutes (96 active rounds). Observed:
+The reorg implementation was validated on a 5-node testnet (`mxd-test-node-testing-0..4`) with a 16-hour soak driving 1 user transaction every 10 minutes (96 active rounds). Observed:
 
 - 30 divergence events flagged (some real forks, some single-node sync lags)
 - 100% resolved within 1-2 rounds via reorg or natural sync
@@ -215,6 +215,8 @@ The reorg implementation was validated on a 5-node testnet with a 16-hour soak d
 - 0 height stalls
 - 0 validator dropouts
 - Chain advanced 103 blocks at average 1.07 blocks/round under traffic
+
+Soak telemetry is archived at `F:/Proyectos/v7_soak_archive.log`.
 
 ## 10. References
 
@@ -227,9 +229,10 @@ The reorg implementation was validated on a 5-node testnet with a 16-hour soak d
 - **Tests:**
   - `tests/test_fork_choice.c` — synthetic fork-choice scenarios
   - `tests/test_reorg.c` — reorg primitive (UTXO reversal, mempool re-add, depth limit, genesis untouchable)
+- **Audit:** `F:/Proyectos/AUDIT_2026-05-07_v7_pre_mainnet.md` F7-6 (the finding this spec answers)
 - **MXD-CONS-01** for the validation-chain canonical bytes that MXD-CONS-02 reorgs preserve.
 
 ## 11. Changelog
 
-- **v1.0.0** — Initial draft. Hierarchical fork-choice rule (quorum → sig count → hash); 10-block reorg depth limit; UTXO delta storage; transaction-category rollback semantics; no slashing for v7.x.
-- **v1.0.1** — §6 UTXO delta storage format corrected. v1.0.0 described a generic `u16 key_len + key string` encoding that was unimplementable as written and did not match the deployed serialization. v1.0.1 documents the actual structured layout (`u8[64] prev_tx_hash + u32 output_index` per spent; `u8[64] tx_hash + u32 output_index + u8[32] owner_addr + u64 amount` per created). §6.1 split out and clarifies that delta-write is now genuinely atomic with the block via a single `rocksdb_writebatch` in `mxd_store_block`.
+- **v1.0.0 (2026-05-09)** — Initial draft. Hierarchical fork-choice rule (quorum → sig count → hash); 10-block reorg depth limit; UTXO delta storage; transaction-category rollback semantics; no slashing for v7.x.
+- **v1.0.1 (2026-05-12)** — §6 UTXO delta storage format corrected (F8-12 from `AUDIT_2026-05-09_v8_pre_mainnet_delta.md`). v1.0.0 described a generic `u16 key_len + key string` encoding that was unimplementable as written and did not match the deployed serialization. v1.0.1 documents the actual structured layout (`u8[64] prev_tx_hash + u32 output_index` per spent; `u8[64] tx_hash + u32 output_index + u8[32] owner_addr + u64 amount` per created). §6.1 split out and clarifies that delta-write is now genuinely atomic with the block via a single `rocksdb_writebatch` (F8-1, fixed in `mxd_store_block`).

@@ -1,225 +1,117 @@
-# MXD — Mexican Denarius
+# MXD - Mexican Denarius
 
-[![CI](https://github.com/AlanRuno/mxd/actions/workflows/ci.yml/badge.svg)](https://github.com/AlanRuno/mxd/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/AlanRuno/mxd)](https://github.com/AlanRuno/mxd/releases)
-[![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Issues](https://img.shields.io/github/issues/AlanRuno/mxd)](https://github.com/AlanRuno/mxd/issues)
-[![Discussions](https://img.shields.io/github/discussions/AlanRuno/mxd)](https://github.com/AlanRuno/mxd/discussions)
+A UTXO-based blockchain with Rapid Stake Consensus (RSC), hybrid post-quantum cryptography, and zero mandatory transaction fees. Written in C.
 
-> *"Firm roots, strong coin: MXD — Planting the seeds for digital economy in Mexico."*
+## Overview
 
-**Mexican Denarius (MXD)** is a hybrid classical/post-quantum Layer-1 blockchain
-with a one-way bridge to BNB Smart Chain. The project name comes from "deni"
-("containing ten"), the Latin root of denarius, hat-tipping the decimal base
-behind every monetary system. Both Ed25519 (classical, fast) and ML-DSA-87 /
-Dilithium5 (FIPS 204, quantum-resistant) signature schemes are first-class
-citizens at the address, transaction, and consensus layers.
+MXD is a layer-1 cryptocurrency designed for efficient, secure, and accessible digital transactions. The network runs Protocol v4, which embeds on-chain validator scoring directly into block headers for transparent, deterministic proposer selection.
 
-This repository contains the reference C implementation of the chain, the
-BSC-side bridge contract, the spec documents (`docs/standards/MXD-*`), and
-operator utilities. The chain is live on mainnet; see the [protocol specs](docs/standards/MXD-00-index.md)
-for wire formats and address derivation rules.
+Key design choices:
 
-## About the project
+- **UTXO transaction model** with voluntary tips (no mandatory fees)
+- **Hybrid cryptography**: Ed25519 (default) + Dilithium5 (post-quantum), selectable per node at runtime via `algo_id`
+- **Rapid Stake Consensus (RSC)**: round-robin block proposal with score-weighted fallback and validation chain signatures from 50%+ of the Rapid Table
+- **RocksDB** storage for blocks, UTXOs, and address indexes
+- **Bridge support**: native BNB-to-MXD bridge with v3 bridge mint transactions
 
-MXD is built to be a fee-free, energy-efficient digital currency that hands
-control of value transfer back to its users. The economic and product context
-— mission, voluntary-tip-driven incentive model, optional fiscal-integration
-roadmap, and the broader vision for a digital economy in Mexico — is laid out
-in the project [white paper](https://mxd.com.mx/WhitePaper_En.pdf). This
-repository is the technical implementation of that vision: the chain, the
-bridge, the cryptography, and the conformance specs.
+The project builds into two artifacts: `libmxd.so` (shared library) and `mxd_node` (standalone node binary).
 
-The work began in 2020 under the **Cripto Águila** (Crypto Eagle) team and is
-operated today by [Runo Networks](https://runonetworks.com).
+## Features
 
-## Status
-
-| Component        | State                                              |
-|------------------|----------------------------------------------------|
-| Chain core       | Mainnet live — 5 validator quorum, round-robin BFT |
-| Address format   | MXD-01 v1.1 (addr32, dual-algo Ed25519 + Dilithium5) |
-| Bridge BSC → MXD | Live (one-way). Contract: `0xCae102064d8E9e13d5b48F38bAc53d1155B331B4` |
-| Bridge MXD → BSC | **Disabled.** No code path exercised on mainnet.   |
-| Oracle quorum    | 3-of-5 Dilithium5 K-of-N attestation per mint      |
-
-## Architecture at a glance
-
-- **Consensus.** Round-robin proposer with K-of-N validator chain signatures.
-  Empty heartbeat blocks every ~5s when idle. Reorg via fork-choice score.
-- **Transactions.** UTXO model, 64-bit base units (`1 MXD = 100,000,000` base units).
-  v3 transactions carry typed payloads for bridge mints and admin operations.
-- **Fee model.** Network-mandated transaction fees are **zero**: validators
-  only enforce `inputs >= outputs`. Senders MAY attach a voluntary tip
-  (`voluntary_tip` u64 field) that is distributed to the validators
-  participating in block closure, rewarding faster responders proportionally
-  more. The chain does not impose, deduct, or split off an implicit fee.
-- **Signing.** Per-output algo_id selects Ed25519 (algo 1) or Dilithium5 (algo 2).
-  All addresses are 32 bytes with a version byte for network + algorithm.
-- **Bridge.** Users deposit BNBMXD on BSC; an oracle set of 5 Dilithium5 keys
-  attests N-of-M to the deposit; the MXD node validates every signature and
-  mints the equivalent MXD via a coinbase-shaped `bridge_mint` v3 tx. Replay
-  protection is enforced at the consensus layer by an on-chain
-  `bridge_tx:<source_tx_hash>` index.
-- **Admin operations.** `AUTHORIZE_BRIDGE`, `REVOKE_BRIDGE`, `UPDATE_ORACLE_SET`
-  admin transactions require 3-of-5 oracle Dilithium5 signatures over a
-  canonical message. See [MXD-API-01](docs/standards/MXD-API-01-bridge-oracle-attestation.md).
-
-## Specifications
-
-All wire formats, signature schemes, address derivation, and protocol invariants
-live in [`docs/standards/`](docs/standards/):
-
-| Spec      | Topic                                                  |
-|-----------|--------------------------------------------------------|
-| MXD-00    | Index of standards                                     |
-| MXD-01    | Address format (addr32, dual-algo)                     |
-| MXD-02    | Mnemonic + HD derivation (BIP-39 + per-algo paths)     |
-| MXD-03    | Signing and verification (Ed25519 + Dilithium5)        |
-| MXD-04    | Transaction format and sighash                         |
-| MXD-05    | Wallet-at-rest encryption                              |
-| MXD-06    | P2P handshake                                          |
-| MXD-API-01 | Bridge oracle attestation (K-of-N canonical message)  |
-
-Each spec ships with `*-test-vectors.json` for cross-implementation conformance.
+- Zero mandatory fees -- users may attach voluntary tips
+- Hybrid Ed25519 / Dilithium5 signatures on the same network
+- Protocol v4 on-chain validator scoring (stake 30%, proposals 25%, participation 25%, latency 20%)
+- Deterministic total supply tracking per block
+- WASM3-based smart contracts (basic support, disabled by default)
+- HTTP JSON API for wallets, explorers, and bridge integrations
+- P2P networking with DHT-based node discovery
+- Cross-platform: Linux, macOS, Windows (MSYS2)
 
 ## Building
 
-Dependencies are installed via the platform-specific scripts at the repo root:
+### Prerequisites
 
 ```bash
-./install_dependencies_linux.sh    # or _macos.sh / _windows.sh
+# Automated (recommended)
+./install_dependencies.sh [--force_build]
+
+# Manual -- Ubuntu/Debian
+sudo apt-get install -y build-essential cmake libssl-dev libsodium-dev libgmp-dev
 ```
 
-Then a standard CMake out-of-source build:
+Additional libraries built from source by the install script: **wasm3**, **libuv**, **uvwasi**, **RocksDB**.
+
+### Compile
 
 ```bash
+git clone https://github.com/AlanRuno/mxdlib.git
+cd mxdlib
 mkdir build && cd build
 cmake ..
 cmake --build . --parallel
 ```
 
-Outputs land in `build/lib/`:
+This produces `lib/libmxd.so` and `lib/mxd_node`.
 
-- `libmxd.so` — shared library with the chain core, transaction codec, consensus, bridge, etc.
-- `mxd_node` — validator/node binary linking against `libmxd.so`
-
-For development workflow, build options, and test conventions, see
-[`CONTRIBUTING.md`](CONTRIBUTING.md). The configuration loader and its defaults
-live in `src/mxd_config.c`.
-
-## Smart contracts
-
-The BSC-side bridge contracts are in [`contracts/contracts/`](contracts/contracts/):
-
-- `BNBMXD.sol` — fixed-supply ERC-20 representation of MXD on BSC mainnet
-- `MXDBridgeV3.sol` — the live one-way bridge contract
-- `TestBNBMXD.sol` — testnet token (BSC testnet only)
-- `MXDBridge.sol` — V1/V2 historical reference (not deployed on mainnet)
-
-Build and test with Hardhat:
+## Running
 
 ```bash
-cd contracts
-npm install
-npx hardhat test
-npx hardhat compile
+# Start with defaults (loads default_config.json)
+./mxd_node
+
+# Custom config and algorithm override
+./mxd_node --config testnet.json --algo dilithium5
+
+# Override port / register as bootstrap
+./mxd_node --port 9000 --bootstrap
 ```
 
-For mainnet deploys, set `BSC_MAINNET_RPC_URL` (your own RPC endpoint) and
-`DEPLOYER_PRIVATE_KEY` in your environment — see [`contracts/hardhat.config.js`](contracts/hardhat.config.js).
+Configuration is via a JSON file. Key fields: `node_id`, `network_type`, `port`, `data_dir`, `initial_stake`, `preferred_sign_algo` (1 = Ed25519, 2 = Dilithium5), `bootstrap_nodes`. See the `default_config.json` file for all options.
 
-## Tools
+### Testnet
 
-[`tools/`](tools/) contains the three utilities that are useful to anyone
-building against or auditing MXD:
+Currently deployed on 5 GCP nodes (`mxd-test-node-testing-0` through `4`) in `us-central1-a`. HTTP API listens on port **8080**, P2P on port **8000**.
 
-- `mxd_sign.c` — standalone CLI for the FIPS 204 ML-DSA-87 sign/verify path.
-  Useful for any client implementing the spec without linking libmxd
-  (alternative-language ports, independent signature verifiers, etc.).
-- `gen_test_vectors.c` — regenerates the `docs/standards/MXD-*-test-vectors.json`
-  golden files from the C reference implementation. Run this after modifying
-  any wire-format or signing code to keep the cross-implementation conformance
-  fixtures in sync.
-- `generate_node_key.py` — generates a fresh `node_keys.v2` validator identity
-  file (106 bytes, Ed25519). Required when bringing up a new validator.
+## API Endpoints (summary)
 
-Operator-side tooling (admin-tx signing, bridge-auth registry maintenance,
-historical migration utilities) is not redistributed here — those are tightly
-coupled to the canonical operator's deployment and are not useful in isolation.
-The wire format for admin transactions is fully specified in
-[MXD-API-01](docs/standards/MXD-API-01-bridge-oracle-attestation.md), so any
-party can implement an admin-tx signer from the spec alone.
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/status` | Node status and chain height |
+| GET | `/block/{height}` | Block by height |
+| GET | `/tx/{hash}` | Transaction by hash |
+| GET | `/balance/{address}` | Address balance (UTXO sum) |
+| POST | `/tx/submit` | Submit a signed transaction |
+| POST | `/bridge/submit` | Submit a bridge mint transaction |
+| GET | `/validators` | Current validator set and scores |
+| GET | `/mempool` | Pending transactions |
 
-## Running a validator
+See source (`mxd_http_api.c`) for the full endpoint list and request/response formats.
 
-External validators are welcome and the validator set is **permissionless and
-stake-driven** — no admin transaction, no governance vote, no quorum approval
-is required to join. The chain code at `src/blockchain/mxd_validator_management.c`
-admits any node whose self-signed JOIN request meets the on-chain stake
-threshold. The currently active mainnet set is operated by Runo Networks
-simply because they are the only nodes that have joined to date.
+## Bridge Support
 
-To bring up your own validator:
+MXD includes a native bridge endpoint (`/bridge/submit`) for cross-chain transfers between BNB and MXD. Bridge mint transactions use the v3 transaction format and are validated against the bridge oracle before inclusion in a block.
 
-1. **Build** `mxd_node` and `libmxd.so` from this repo (see [Building](#building)).
-2. **Generate** a validator identity:
-   `python3 tools/generate_node_key.py --out data/node_keys.v2`.
-3. **Acquire stake.** A JOIN request is accepted iff the requesting address
-   holds at least **0.10 %** of `total_supply` in unspent UTXOs at the time
-   the request is processed (`stake_amount >= total_supply / 1000`, enforced
-   in `mxd_validator_management.c`).
-4. **Configure** the node from the sample in `src/mxd_config.c` — set your
-   data directory and external IP. Bootstrap is automatic:
-   `https://mxd.network/bootstrap/main` (mainnet) or
-   `https://mxd.network/bootstrap/test` (testnet), with fallback to the
-   hardcoded `bootstrap{1,2,3}.mxd.network:8000` seeds. See
-   `mxd_fetch_bootstrap_nodes` for the discovery flow.
-5. **Submit a JOIN request.** Sign the 52-byte canonical message
-   `"MXD-VAL-V1\0" || 0x00 || addr32 || timestamp_be` with your node key and
-   broadcast it. Once the chain validates your stake and signature, your
-   node enters the active validator set and starts participating in
-   round-robin block proposal and K-of-N chain signatures.
-   The wire format and validation rules are normative in
-   [MXD-CONS-01 §7](docs/standards/MXD-CONS-01-validator-consensus-signatures.md).
-6. **Exit** the set the same way with `op_type = 0x01` when you want to
-   stop validating.
+Detailed documentation:
 
-Discussions and Issues are the right place to ask for help bringing up a
-node, but joining the set is not gated on a maintainer decision.
+- [Bridge Transactions](docs/BRIDGE_TRANSACTIONS.md)
+- [Bridge Deployment](docs/BRIDGE_DEPLOYMENT.md)
+- [Bridge System Technical Documentation](docs/MXD_Bridge_System_Technical_Documentation.html)
 
-## Oracle set (mainnet)
+## Documentation
 
-See [`docs/MAINNET_ORACLE_SET.md`](docs/MAINNET_ORACLE_SET.md) for the 5
-Dilithium5 public keys + derived addresses of the on-chain mainnet oracle set.
-These keys are also published on-chain via the `UPDATE_ORACLE_SET` admin tx.
+The `docs/` directory contains detailed guides:
 
-## Security
-
-Found a vulnerability? See [`SECURITY.md`](SECURITY.md) for the responsible
-disclosure policy.
-
-## Contributing
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for build instructions, test
-conventions, PR guidelines, and commit message style.
+- [Build Instructions](docs/BUILD.md)
+- [Hybrid Cryptography Guide](docs/HYBRID_CRYPTO.md)
+- [Module Documentation](docs/MODULES.md)
+- [Integration Guide](docs/INTEGRATION.md)
+- [Serialization Spec v4](docs/serialization_spec_v4.md)
+- [Smart Contracts Roadmap](docs/SMART_CONTRACTS_ROADMAP.md)
+- [Security Guidelines](docs/SECURITY_GUIDELINES.md)
+- [Platform Quirks](docs/PLATFORM_QUIRKS.md)
+- [Determinism](docs/DETERMINISM.md)
+- [MXD Whitepaper (English)](https://mxd.com.mx/WhitePaper_En.pdf)
 
 ## License
 
-AGPL-3.0-only. See [`LICENSE`](LICENSE).
-
-The AGPL was chosen deliberately: any deployment that exposes the chain or
-bridge to users over a network must publish its source modifications. This
-keeps the protocol auditable as the network grows and prevents proprietary
-forks from running closed-source.
-
-## Acknowledgments
-
-- The **Cripto Águila** (Crypto Eagle) team for the founding vision, the
-  whitepaper, and four years of research that led to this release.
-- ML-DSA-87 / Dilithium5: NIST FIPS 204 (CRYSTALS-Dilithium team).
-- RocksDB, libmicrohttpd, cJSON, OpenSSL — the standard library dependencies.
-- The BSC team for the underlying BNB Smart Chain that hosts the bridge.
-
-Mainnet is operated by [Runo Networks](https://runonetworks.com). Read the
-project white paper at [mxd.com.mx](https://mxd.com.mx/WhitePaper_En.pdf).
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.

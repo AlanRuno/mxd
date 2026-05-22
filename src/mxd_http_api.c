@@ -1260,6 +1260,7 @@ char* handle_bridge_submit(const char *post_data, int *status_code) {
     payload.source_block_number = (uint64_t)source_block_num->valuedouble;
 
     // Parse recipient MXD address (32 bytes = 64 hex chars per MXD-01 v1.1.x addr32)
+    // TODO: mxd-bridge-oracle must emit 64-hex recipient — update after deploy
     if (hex_to_bytes(recipient->valuestring, payload.recipient_addr, MXD_ADDR32_LEN) != MXD_ADDR32_LEN) {
         cJSON_Delete(json);
         *status_code = MHD_HTTP_BAD_REQUEST;

@@ -15,11 +15,9 @@ module.exports = {
       accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
     },
     bscMainnet: {
-      // Provide your own BSC mainnet RPC endpoint via BSC_MAINNET_RPC_URL
-      // (e.g. NodeReal, QuickNode, Ankr, or your own node). The public free
-      // tier at https://bsc-dataseed.binance.org/ works for occasional calls
-      // but is rate-limited and not recommended for production deploys.
-      url: process.env.BSC_MAINNET_RPC_URL || "https://bsc-dataseed.binance.org/",
+      // Default uses the paid Nodereal endpoint we already pay for in oracle config.
+      // Override with BSC_MAINNET_RPC_URL if rotating endpoints during the launch.
+      url: process.env.BSC_MAINNET_RPC_URL || "https://bsc-mainnet.nodereal.io/v1/46d6c304108e4b76b564ef40caba45bf",
       chainId: 56,
       accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
       // Reasonable defaults for a one-shot bridge deploy. BSC mainnet typically

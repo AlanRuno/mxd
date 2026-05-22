@@ -267,4 +267,10 @@ void mxd_free_validation_chain(mxd_block_t *block) {
         block->validator_scores_count = 0;
         block->validator_scores_capacity = 0;
     }
+    if (block && block->rapid_eviction_entries) {
+        free(block->rapid_eviction_entries);
+        block->rapid_eviction_entries = NULL;
+        block->rapid_eviction_count = 0;
+        block->rapid_eviction_capacity = 0;
+    }
 }

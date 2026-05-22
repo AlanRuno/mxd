@@ -32,6 +32,25 @@ typedef struct {
     uint8_t signature[MXD_SIGNATURE_MAX];
 } mxd_rapid_membership_entry_t;
 
+// Block-embedded validator EVICTION entry (v8+). The evictor is an
+// active validator that signed MXD-VAL-V1 EVICT canonical bytes
+// (domain_tag(11) || op_type=0x02 || target_addr32(32) ||
+// evictor_addr32(32) || timestamp_be(8) = 84 bytes) over a target
+// whose on-chain balance has fallen below the §4.4 stake threshold.
+// The evictor's pubkey + signature travel inline so apply-block
+// nodes can authenticate without state lookup. See MXD-CONS-01
+// v1.2.x (forthcoming) §4.x for the canonical bytes.
+typedef struct {
+    uint8_t target_addr[32];          // The validator being evicted
+    uint8_t evictor_addr[32];         // The active validator that signed
+    uint64_t timestamp;
+    uint8_t evictor_algo_id;
+    uint16_t evictor_public_key_length;
+    uint8_t evictor_public_key[2592]; // Max size for Dilithium5
+    uint16_t signature_length;
+    uint8_t signature[MXD_SIGNATURE_MAX];
+} mxd_rapid_eviction_entry_t;
+
 // Transaction storage within block
 typedef struct {
     uint8_t *data;
@@ -67,6 +86,12 @@ typedef struct {
     mxd_rapid_membership_entry_t *rapid_membership_entries;
     uint32_t rapid_membership_count;
     uint32_t rapid_membership_capacity;
+    // v8+: peer-driven validator eviction entries (Phase 3 of permissionless
+    // validator-management). Serialized only when block->version >= 8;
+    // older blocks ignore this field on the wire.
+    mxd_rapid_eviction_entry_t *rapid_eviction_entries;
+    uint32_t rapid_eviction_count;
+    uint32_t rapid_eviction_capacity;
     mxd_amount_t total_supply;   // Total supply in base units (was double)
     uint8_t validator_scores_root[64];            // SHA-512 of scoring data (v4+)
     mxd_validator_score_entry_t *validator_scores; // Per-validator cumulative scores (v4+)
@@ -106,6 +131,22 @@ int mxd_append_membership_entry(mxd_block_t *block, const uint8_t node_address[3
                                 uint8_t algo_id, const uint8_t *public_key, uint16_t public_key_length,
                                 const uint8_t *signature, uint16_t signature_length,
                                 uint64_t timestamp);
+
+// v8+: append a peer-signed EVICT entry to the block. Verifies the signature
+// against MXD-VAL-V1 EVICT canonical bytes (84 B) before storing. Returns -1
+// on any verification or bounds failure. Caller MUST ensure block->version
+// >= 8 and that the proposer-side validation rules (signer + target in
+// rapid_table, target balance < threshold, grace period elapsed, floor not
+// violated) have been checked.
+int mxd_append_eviction_entry(mxd_block_t *block,
+                              const uint8_t target_addr[32],
+                              const uint8_t evictor_addr[32],
+                              uint8_t evictor_algo_id,
+                              const uint8_t *evictor_public_key,
+                              uint16_t evictor_public_key_length,
+                              const uint8_t *signature,
+                              uint16_t signature_length,
+                              uint64_t timestamp);
 
 int mxd_block_has_membership_quorum(const mxd_block_t *block, size_t rapid_table_size);
 

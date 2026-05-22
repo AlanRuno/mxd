@@ -9,6 +9,8 @@
 #include "../../include/mxd_ntp.h"
 #include "../../include/mxd_serialize.h"
 #include "../../include/mxd_protocol_version.h"
+#include "../../include/mxd_domain_tags.h"
+#include "../../include/mxd_endian.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -799,20 +801,36 @@ int mxd_append_membership_entry(mxd_block_t *block, const uint8_t node_address[3
     }
   }
   
-  // For genesis blocks (height == 0), skip signature verification because:
-  // - The signatures were collected over a digest calculated from an empty block (no coinbase txs)
-  // - The current block now has coinbase transactions, so the merkle_root is different
-  // - The signatures were already verified when the sign responses were received
-  // For non-genesis blocks, verify signature over membership digest
+  // Signature-verification dispatch by block height:
+  //
+  // - height == 0 (genesis): signatures were collected over a digest computed
+  //   from an empty block at consensus time; current block now has coinbase
+  //   txs (different merkle root), so re-verifying is impossible. The
+  //   responses were already verified inbound, so accept here.
+  //
+  // - height > 0 (post-genesis, permissionless JOIN per Phase 1+4): the
+  //   validator signed MXD-VAL-V1 canonical bytes
+  //   (domain_tag || op_type=0x00=JOIN || addr32 || timestamp_be) — NOT a
+  //   block digest. The proposer's mxd_validate_join_request already passed
+  //   the same verify upstream; we redo it here so that peers applying the
+  //   block on receipt re-derive the same authentication independently
+  //   (otherwise they couldn't tell a forged membership entry from a real
+  //   one). The membership digest path was a leftover from the genesis-only
+  //   design and could never accept a JOIN-signed entry.
   if (block->height > 0) {
-    uint8_t digest[64];
-    if (mxd_calculate_membership_digest(block, digest) != 0) {
-      return -1;
-    }
+    uint8_t sign_data[MXD_DOMAIN_TAG_VAL_LEN + 1 + 32 + 8];
+    size_t off = 0;
+    memcpy(sign_data + off, MXD_DOMAIN_TAG_VAL, MXD_DOMAIN_TAG_VAL_LEN);
+    off += MXD_DOMAIN_TAG_VAL_LEN;
+    sign_data[off++] = 0x00; /* op_type = JOIN */
+    memcpy(sign_data + off, node_address, 32);
+    off += 32;
+    uint64_t ts_be = mxd_htonll(timestamp);
+    memcpy(sign_data + off, &ts_be, 8);
 
-    // Verify signature using algorithm-aware verification with provided public key
-    if (mxd_sig_verify(algo_id, signature, signature_length, digest, 64, public_key) != 0) {
-      return -1; // Invalid signature
+    if (mxd_sig_verify(algo_id, signature, signature_length,
+                       sign_data, sizeof(sign_data), public_key) != 0) {
+      return -1; // Invalid JOIN signature
     }
   }
   
@@ -869,6 +887,116 @@ int mxd_append_membership_entry(mxd_block_t *block, const uint8_t node_address[3
   
   block->rapid_membership_count++;
   
+  return 0;
+}
+
+// v8+: Append a peer-signed EVICT entry to the block. Verifies the
+// evictor's signature against MXD-VAL-V1 EVICT canonical bytes (84 B):
+//   "MXD-VAL-V1\0" || 0x02 || target_addr32(32) || evictor_addr32(32) ||
+//   timestamp_be(8)
+//
+// The proposer-side admission checks (signer ∈ rapid_table, target ∈
+// rapid_table, balance < threshold, grace period, floor) live in
+// mxd_rsc.c's drain code. This helper handles ONLY the cryptographic
+// authentication that runs on every node that applies the block —
+// proposer at propose-time AND peer at finalize-time.
+int mxd_append_eviction_entry(mxd_block_t *block,
+                              const uint8_t target_addr[32],
+                              const uint8_t evictor_addr[32],
+                              uint8_t evictor_algo_id,
+                              const uint8_t *evictor_public_key,
+                              uint16_t evictor_public_key_length,
+                              const uint8_t *signature,
+                              uint16_t signature_length,
+                              uint64_t timestamp) {
+  if (!block || !target_addr || !evictor_addr || !evictor_public_key ||
+      !signature || signature_length == 0 || evictor_public_key_length == 0) {
+    return -1;
+  }
+  if (block->version < 8) {
+    return -1; // EVICT entries are v8+
+  }
+
+  // Algo + length sanity
+  if (evictor_algo_id != MXD_SIGALG_ED25519 && evictor_algo_id != MXD_SIGALG_DILITHIUM5) {
+    return -1;
+  }
+  size_t expected_pk = mxd_sig_pubkey_len(evictor_algo_id);
+  if (evictor_public_key_length != expected_pk) {
+    return -1;
+  }
+  size_t expected_sig = mxd_sig_signature_len(evictor_algo_id);
+  if (signature_length != expected_sig) {
+    return -1;
+  }
+
+  // Duplicate guard: same (target_addr, evictor_addr) tuple appearing twice
+  if (block->rapid_eviction_entries) {
+    for (uint32_t i = 0; i < block->rapid_eviction_count; i++) {
+      const mxd_rapid_eviction_entry_t *e = &block->rapid_eviction_entries[i];
+      if (memcmp(e->target_addr, target_addr, 32) == 0 &&
+          memcmp(e->evictor_addr, evictor_addr, 32) == 0) {
+        return -1;
+      }
+    }
+  }
+
+  // Storage-path crypto verify against MXD-VAL-V1 EVICT canonical bytes
+  uint8_t sign_data[MXD_DOMAIN_TAG_VAL_LEN + 1 + 32 + 32 + 8];
+  size_t off = 0;
+  memcpy(sign_data + off, MXD_DOMAIN_TAG_VAL, MXD_DOMAIN_TAG_VAL_LEN);
+  off += MXD_DOMAIN_TAG_VAL_LEN;
+  sign_data[off++] = 0x02; /* op_type = EVICT */
+  memcpy(sign_data + off, target_addr, 32);  off += 32;
+  memcpy(sign_data + off, evictor_addr, 32); off += 32;
+  uint64_t ts_be = mxd_htonll(timestamp);
+  memcpy(sign_data + off, &ts_be, 8);
+
+  if (mxd_sig_verify(evictor_algo_id, signature, signature_length,
+                     sign_data, sizeof(sign_data), evictor_public_key) != 0) {
+    return -1; // Invalid EVICT signature
+  }
+
+  // evictor_addr32 == SHA-512(algo_id || pubkey)[0..31]
+  uint8_t derived_addr[MXD_ADDR32_LEN];
+  if (mxd_derive_address(evictor_algo_id, evictor_public_key,
+                          evictor_public_key_length, derived_addr) != 0) {
+    return -1;
+  }
+  if (memcmp(evictor_addr, derived_addr, MXD_ADDR32_LEN) != 0) {
+    MXD_LOG_ERROR("blockchain", "EVICT evictor_addr doesn't match derived address");
+    return -1;
+  }
+
+  // Grow the array if needed (bootstrap-from-0 pattern matches join pool fix)
+  if (block->rapid_eviction_count >= block->rapid_eviction_capacity) {
+    uint32_t new_capacity = block->rapid_eviction_capacity == 0
+                                ? 4
+                                : block->rapid_eviction_capacity * 2;
+    mxd_rapid_eviction_entry_t *new_entries = realloc(block->rapid_eviction_entries,
+                                                       new_capacity * sizeof(mxd_rapid_eviction_entry_t));
+    if (!new_entries) {
+      return -1;
+    }
+    block->rapid_eviction_entries = new_entries;
+    block->rapid_eviction_capacity = new_capacity;
+  }
+
+  mxd_rapid_eviction_entry_t *entry =
+      &block->rapid_eviction_entries[block->rapid_eviction_count];
+  memcpy(entry->target_addr, target_addr, 32);
+  memcpy(entry->evictor_addr, evictor_addr, 32);
+  entry->timestamp = timestamp;
+  entry->evictor_algo_id = evictor_algo_id;
+  entry->evictor_public_key_length = evictor_public_key_length;
+  memcpy(entry->evictor_public_key, evictor_public_key, evictor_public_key_length);
+  entry->signature_length = signature_length;
+  if (signature_length > MXD_SIGNATURE_MAX) {
+    return -1;
+  }
+  memcpy(entry->signature, signature, signature_length);
+
+  block->rapid_eviction_count++;
   return 0;
 }
 

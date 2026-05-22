@@ -1640,6 +1640,16 @@ static int handle_incoming_message(const char *address, uint16_t port,
         case MXD_MSG_PEERS:
             handle_peers_message(address, port, payload, header->length);
             break;
+        case MXD_MSG_VALIDATOR_JOIN_REQUEST: {
+            extern int mxd_handle_validator_join_message(const uint8_t *payload, size_t payload_len);
+            mxd_handle_validator_join_message(payload, header->length);
+            break;
+        }
+        case MXD_MSG_VALIDATOR_EVICT_REQUEST: {
+            extern int mxd_handle_validator_evict_message(const uint8_t *payload, size_t payload_len);
+            mxd_handle_validator_evict_message(payload, header->length);
+            break;
+        }
         default:
             if (message_handler) {
                 MXD_LOG_INFO("p2p", "Dispatching to handler: type=%d len=%u from %s:%u", 

@@ -8,7 +8,7 @@
 | **Updated** | 2026-04-29 |
 | **Author(s)** | MXD Project |
 | **Requires** | MXD-01, MXD-03 |
-| **Supersedes** | `docs/serialization_spec_v4.md` (transaction-related portions only) |
+| **Supersedes** | `mxdlib/docs/serialization_spec_v4.md` (transaction-related portions only) |
 
 ## 1. Abstract
 
@@ -212,7 +212,7 @@ This is a meaningful optimization because mempool gossip generates many redundan
 
 **The canonical (unsigned) tx bytes of §4 do NOT include `tx_hash`.** Sighash construction in §7 is unchanged. Wallet-side signing only needs §4 + §7.
 
-`tx_hash` was added to the broadcast format in commit `fdb5148` (Feb 2026) as part of the P2P transaction broadcast handler, simultaneously with the `MXD_MSG_TRANSACTIONS` gossip message type. It is also present in the block-storage format for the same reason: the `block_to_json` HTTP endpoint reads cached `tx_hash` directly without recomputing per-transaction.
+`tx_hash` was added to the broadcast format in mxdlib commit `fdb5148` (Feb 2026) as part of the P2P transaction broadcast handler, simultaneously with the `MXD_MSG_TRANSACTIONS` gossip message type. It is also present in the block-storage format for the same reason: the `block_to_json` HTTP endpoint reads cached `tx_hash` directly without recomputing per-transaction.
 
 ## 11. Validation rules
 
@@ -354,7 +354,7 @@ This defends against three classes of risk:
 - **MXD-03**: Signing & Verification.
 - **RFC 8032**: Edwards-Curve Digital Signature Algorithm (EdDSA).
 - **FIPS 180-4**: Secure Hash Standard (SHA-512).
-- **`docs/serialization_spec_v4.md`**: Predecessor document, partially superseded by MXD-04 (transaction sections only; non-transaction sections remain in force pending further MXD-NN specs).
+- **`mxdlib/docs/serialization_spec_v4.md`**: Predecessor document, partially superseded by MXD-04 (transaction sections only; non-transaction sections remain in force pending further MXD-NN specs).
 
 ## 15. Change log
 
@@ -365,5 +365,5 @@ This defends against three classes of risk:
 | 2026-04-27 | 1.1.1 | Second-audit revision **N4**: §12.5 negative-case count corrected from "at least 6" to "at least 8" to match the eight cases enumerated in `MXD-04-test-vectors.json`. Editorial only; no semantic change. |
 | 2026-04-27 | 1.1.2 | Third-audit cosmetic revisions: **T1** (§12.5 count corrected to "at least 9" after the v1.1.1 patch round added the composite-output-refusal vector; the bullet enumeration is now explicitly non-exhaustive with the JSON as authoritative count). **T2** (dropped the stale `v1.1.0` version pin on the MXD-01 reference in §14; current major-minor is now expressed as `v1.1.x`). |
 | 2026-04-28 | 1.1.3 | Audit-fixup **M-1**: corrected stale `4595` signature-size comment in §10 `TxInput_signed` to `4627` (Dilithium5 / ML-DSA-87 FIPS 204). No wire-format change; the normative size in MXD-03 §5.2 was already 4627. |
-| 2026-04-29 | 1.1.4 | Audit-fixup-v2 **restore H-1**: re-added `tx_hash[64]` field to §10 broadcast pseudocode; new §10.1 documents it as a non-authoritative pre-parse P2P gossip deduplication hint. §11.9 expanded with dedup-hint validation rule. `tx_hash` was incorrectly removed in the prior audit pass based on a minimalist reading of the spec; this revision aligns the spec with the implementation rationale. No change to §4 canonical bytes or §7 sighash construction. |
+| 2026-04-29 | 1.1.4 | Audit-fixup-v2 **restore H-1**: re-added `tx_hash[64]` field to §10 broadcast pseudocode; new §10.1 documents it as a non-authoritative pre-parse P2P gossip deduplication hint (added in mxdlib `fdb5148`). §11.9 expanded with dedup-hint validation rule. `tx_hash` was incorrectly removed in the prior audit pass (ef5b8ea) based on a minimalist reading of the spec; this revision aligns the spec with the implementation rationale. No change to §4 canonical bytes or §7 sighash construction. |
 | 2026-04-29 | 1.1.5 | Editorial: registry bump cascade for the node block-protocol v6 addr32 cascade (see MXD-00 v1.1.6 changelog). MXD-04 transaction format is **unchanged** — `recipient_addr32` was already 32 bytes since v1.1.0 (F3 cascade). The block-format widening (`proposer_id`, `validator_id`, etc.) is consensus-layer and remains under the **MXD-CONS-01** reservation in MXD-00. This row exists to keep MXD-04's index-version aligned with MXD-00 across the cascade. |

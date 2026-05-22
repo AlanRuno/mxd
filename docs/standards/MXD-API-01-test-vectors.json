@@ -130,7 +130,7 @@
       "_ref": "MXD-API-01 §5",
       "input": {
         "genesis_block_hash_hex": "88cc4486e71b44c8488e18e605f7b2291294988994156096d1950f9918c284cec09b3d46f3faa932156a9508e6d8cf7b5489b36c53763f38de9075278977d3ab",
-        "_genesis_source": "Captured from a v7 testnet via the /block/0 endpoint — block at index 0 with prev_hash all zeros and transaction_count=5 (initial validator-stake coinbases). This is a canonical v7 testnet genesis hash for spec-conformance testing; mainnet implementations MUST substitute their own genesis hash."
+        "_genesis_source": "Captured from live v7 testnet (mxd-test-node-testing-* @ 2026-05-06) via /block/0 endpoint — block at index 0 with prev_hash all zeros, transaction_count=5 (initial validator-stake coinbases). This is the canonical v7 testnet genesis hash; mainnet implementations MUST substitute their own genesis hash."
       },
       "expected": {
         "sha512_full_hex": "a9900ab6c1493c9c3b660aa7ac945d2da6db89e67f19064199d89f46eb195251a3a0af907b98b9b90a7cb4255f40c1c8d0afec88e49c88068ee7443579c18548",

@@ -63,6 +63,51 @@ static void serialize_membership_entry(const mxd_rapid_membership_entry_t *entry
     memcpy(*ptr, entry->signature, entry->signature_length); *ptr += entry->signature_length;
 }
 
+// v8+ eviction-entry serialize/deserialize. Layout mirrors membership but
+// adds the target_addr separate from evictor_addr — the entry binds an
+// evictor's signed assertion ("validator X should leave") to the target
+// validator being removed. See mxd_blockchain.h::mxd_rapid_eviction_entry_t
+// and MXD-CONS-01 v1.2.x §4.x (forthcoming).
+static void serialize_eviction_entry(const mxd_rapid_eviction_entry_t *entry, uint8_t **ptr) {
+    memcpy(*ptr, entry->target_addr, 32);  *ptr += 32;
+    memcpy(*ptr, entry->evictor_addr, 32); *ptr += 32;
+    uint64_t ts_be = mxd_htonll(entry->timestamp);
+    memcpy(*ptr, &ts_be, sizeof(uint64_t)); *ptr += sizeof(uint64_t);
+    memcpy(*ptr, &entry->evictor_algo_id, 1); *ptr += 1;
+    uint16_t pk_len_be = htons(entry->evictor_public_key_length);
+    memcpy(*ptr, &pk_len_be, sizeof(uint16_t)); *ptr += sizeof(uint16_t);
+    memcpy(*ptr, entry->evictor_public_key, entry->evictor_public_key_length);
+    *ptr += entry->evictor_public_key_length;
+    uint16_t sig_len_be = htons(entry->signature_length);
+    memcpy(*ptr, &sig_len_be, sizeof(uint16_t)); *ptr += sizeof(uint16_t);
+    memcpy(*ptr, entry->signature, entry->signature_length); *ptr += entry->signature_length;
+}
+
+static int deserialize_eviction_entry(mxd_rapid_eviction_entry_t *entry,
+                                       const uint8_t **ptr, const uint8_t *end) {
+    if (*ptr + 32 + 32 + 8 + 1 + 2 > end) return -1;
+    memcpy(entry->target_addr, *ptr, 32);  *ptr += 32;
+    memcpy(entry->evictor_addr, *ptr, 32); *ptr += 32;
+    uint64_t ts_be;
+    memcpy(&ts_be, *ptr, sizeof(uint64_t)); *ptr += sizeof(uint64_t);
+    entry->timestamp = mxd_ntohll(ts_be);
+    memcpy(&entry->evictor_algo_id, *ptr, 1); *ptr += 1;
+    uint16_t pk_len_be;
+    memcpy(&pk_len_be, *ptr, sizeof(uint16_t)); *ptr += sizeof(uint16_t);
+    entry->evictor_public_key_length = ntohs(pk_len_be);
+    if (entry->evictor_public_key_length > 2592) return -1;
+    if (*ptr + entry->evictor_public_key_length + 2 > end) return -1;
+    memcpy(entry->evictor_public_key, *ptr, entry->evictor_public_key_length);
+    *ptr += entry->evictor_public_key_length;
+    uint16_t sig_len_be;
+    memcpy(&sig_len_be, *ptr, sizeof(uint16_t)); *ptr += sizeof(uint16_t);
+    entry->signature_length = ntohs(sig_len_be);
+    if (entry->signature_length > MXD_SIGNATURE_MAX) return -1;
+    if (*ptr + entry->signature_length > end) return -1;
+    memcpy(entry->signature, *ptr, entry->signature_length); *ptr += entry->signature_length;
+    return 0;
+}
+
 static int serialize_block(const mxd_block_t *block, uint8_t **data, size_t *data_len) {
     if (!block || !data || !data_len) {
         return -1;
@@ -103,6 +148,20 @@ static int serialize_block(const mxd_block_t *block, uint8_t **data, size_t *dat
         for (uint32_t i = 0; i < block->rapid_membership_count; i++) {
             size += 32 + 8 + 1 + 2 + block->rapid_membership_entries[i].public_key_length +
                     2 + block->rapid_membership_entries[i].signature_length;
+        }
+    }
+
+    // v8+: rapid_eviction_count u32 + per-entry size. Entry layout:
+    //   target_addr(32) + evictor_addr(32) + timestamp(8) + algo_id(1) +
+    //   pk_len(2) + pk(N) + sig_len(2) + sig(M)
+    if (block->version >= 8) {
+        size += sizeof(uint32_t);  // rapid_eviction_count
+        if (block->rapid_eviction_count > 0 && block->rapid_eviction_entries) {
+            for (uint32_t i = 0; i < block->rapid_eviction_count; i++) {
+                size += 32 + 32 + 8 + 1 + 2 +
+                        block->rapid_eviction_entries[i].evictor_public_key_length +
+                        2 + block->rapid_eviction_entries[i].signature_length;
+            }
         }
     }
 
@@ -192,6 +251,17 @@ static int serialize_block(const mxd_block_t *block, uint8_t **data, size_t *dat
     if (block->rapid_membership_count > 0 && block->rapid_membership_entries) {
         for (uint32_t i = 0; i < block->rapid_membership_count; i++) {
             serialize_membership_entry(&block->rapid_membership_entries[i], &ptr);
+        }
+    }
+
+    // v8+: rapid eviction count + entries
+    if (block->version >= 8) {
+        uint32_t evict_count_be = htonl(block->rapid_eviction_count);
+        memcpy(ptr, &evict_count_be, sizeof(uint32_t)); ptr += sizeof(uint32_t);
+        if (block->rapid_eviction_count > 0 && block->rapid_eviction_entries) {
+            for (uint32_t i = 0; i < block->rapid_eviction_count; i++) {
+                serialize_eviction_entry(&block->rapid_eviction_entries[i], &ptr);
+            }
         }
     }
 
@@ -415,6 +485,41 @@ static int deserialize_block(const uint8_t *data, size_t data_len, mxd_block_t *
             }
         }
         block->rapid_membership_capacity = block->rapid_membership_count;
+    }
+
+    // v8+: rapid eviction count + entries
+    block->rapid_eviction_entries = NULL;
+    block->rapid_eviction_count = 0;
+    block->rapid_eviction_capacity = 0;
+    if (block->version >= 8 && ptr + sizeof(uint32_t) <= end) {
+        uint32_t evict_count_be;
+        memcpy(&evict_count_be, ptr, sizeof(uint32_t)); ptr += sizeof(uint32_t);
+        block->rapid_eviction_count = ntohl(evict_count_be);
+        if (block->rapid_eviction_count > 100) {
+            MXD_LOG_ERROR("blockchain_db", "Block %u eviction_count %u > 100 cap",
+                          block->height, block->rapid_eviction_count);
+            if (block->validation_chain) { free(block->validation_chain); block->validation_chain = NULL; }
+            if (block->rapid_membership_entries) { free(block->rapid_membership_entries); block->rapid_membership_entries = NULL; }
+            return -1;
+        }
+        if (block->rapid_eviction_count > 0) {
+            block->rapid_eviction_entries = malloc(block->rapid_eviction_count * sizeof(mxd_rapid_eviction_entry_t));
+            if (!block->rapid_eviction_entries) {
+                if (block->validation_chain) { free(block->validation_chain); block->validation_chain = NULL; }
+                if (block->rapid_membership_entries) { free(block->rapid_membership_entries); block->rapid_membership_entries = NULL; }
+                return -1;
+            }
+            for (uint32_t i = 0; i < block->rapid_eviction_count; i++) {
+                if (deserialize_eviction_entry(&block->rapid_eviction_entries[i], &ptr, end) != 0) {
+                    free(block->rapid_eviction_entries);
+                    block->rapid_eviction_entries = NULL;
+                    if (block->validation_chain) { free(block->validation_chain); block->validation_chain = NULL; }
+                    if (block->rapid_membership_entries) { free(block->rapid_membership_entries); block->rapid_membership_entries = NULL; }
+                    return -1;
+                }
+            }
+            block->rapid_eviction_capacity = block->rapid_eviction_count;
+        }
     }
 
     // Deserialize validator scores (v4+)
