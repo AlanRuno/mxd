@@ -219,6 +219,10 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+      - name: Set up QEMU (multi-arch emulation for arm64 build)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
@@ -227,11 +231,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push image to GHCR
+      - name: Build and push multi-arch image to GHCR
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/${{ github.repository }}:${{ github.ref_name }}
             ghcr.io/${{ github.repository }}:latest
@@ -287,15 +292,196 @@ jobs:
     runs-on: ubuntu-latest
     needs: [security-scan, build-and-test, performance-test, integration-test]
     if: github.ref == 'refs/heads/develop'
-    
+
     steps:
       - uses: actions/checkout@v4
       - name: Deploy to staging
         run: |
           echo "Deploying to staging environment..."
           # Add actual deployment steps here
-    
+
       - name: Run smoke tests
         run: |
           echo "Running smoke tests on staging..."
           # Add smoke test steps here
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Binary release: cross-arch tarballs published as GitHub Release assets.
+  # Runs ONLY on tag push (vX.Y.Z). Bundles mxd_node + libmxd.so + the
+  # source-built deps that letsgo would otherwise compile from scratch
+  # (libuv, libuvwasi, libm3/wasm3, liboqs) so end operators just download
+  # + extract + run instead of waiting 10-20 min for compilation.
+  # System libs (libssl3, libsodium23, librocksdb, etc.) are NOT bundled
+  # — they ship on every supported Ubuntu and letsgo installs them via
+  # apt as a one-line prereq check.
+  # ──────────────────────────────────────────────────────────────────────
+  build-binary-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build-and-test
+    permissions:
+      contents: write     # upload release assets
+      id-token: write     # cosign keyless signing via OIDC
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+            triplet: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            triplet: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config \
+            libssl-dev libsodium-dev librocksdb-dev libcjson-dev \
+            libcurl4-openssl-dev libminiupnpc-dev libmicrohttpd-dev \
+            libgmp-dev libc-bin
+
+      - name: Build source-built deps + libmxd + mxd_node
+        run: |
+          # Runs the same install_dependencies script the manual letsgo
+          # path uses — yields liboqs, libuv, libuvwasi, libm3 in
+          # /usr/local/lib, then builds libmxd + mxd_node into ./build/.
+          chmod +x install_dependencies.sh install_dependencies_linux.sh
+          ./install_dependencies.sh
+          mkdir -p build && cd build
+          cmake -DCMAKE_BUILD_TYPE=Release ..
+          make -j$(nproc) mxd_node
+
+      - name: Stage release bundle
+        run: |
+          set -euo pipefail
+          STAGE="mxd-${{ github.ref_name }}-${{ matrix.triplet }}"
+          mkdir -p "$STAGE/bin" "$STAGE/lib"
+
+          # Our artifacts
+          cp build/lib/mxd_node       "$STAGE/bin/"
+          cp build/lib/libmxd.so      "$STAGE/lib/"
+
+          # Source-built deps that aren't in apt — bundle so the operator
+          # doesn't need to recompile them. Wildcards cover .so / .so.N /
+          # .so.N.M.K symlinks; cp -P preserves symlinks.
+          for so in libuv libuvwasi libm3 liboqs; do
+            cp -P /usr/local/lib/${so}.so* "$STAGE/lib/" 2>/dev/null || true
+          done
+
+          # Operator-facing helper to launch the node with the bundled
+          # libs resolved via LD_LIBRARY_PATH — no global install needed.
+          cat > "$STAGE/bin/mxd_node_run" <<'WRAP'
+          #!/bin/sh
+          DIR="$(cd "$(dirname "$0")/.." && pwd)"
+          LD_LIBRARY_PATH="$DIR/lib:${LD_LIBRARY_PATH:-}" exec "$DIR/bin/mxd_node" "$@"
+          WRAP
+          chmod +x "$STAGE/bin/mxd_node_run"
+
+          # Default config + the network-switch helper so testnet/mainnet
+          # selection works out of the box.
+          mkdir -p "$STAGE/config"
+          cp src/node/default_config.json "$STAGE/config/"
+          cp switch_network.sh "$STAGE/" 2>/dev/null || true
+
+          # README that documents the bundle layout + apt prereq line.
+          cat > "$STAGE/README.md" <<README
+          # MXD prebuilt bundle — ${{ github.ref_name }} (${{ matrix.triplet }})
+
+          ## Quick start
+
+              # 1. Install runtime system libs (one-time, Ubuntu/Debian):
+              sudo apt-get install -y libssl3 libsodium23 librocksdb6.11 \\
+                  libcjson1 libcurl4 libminiupnpc17 libmicrohttpd12 libgmp10
+
+              # 2. Pick a network + start:
+              ./switch_network.sh config/default_config.json testnet
+              ./bin/mxd_node_run config/default_config.json --http-api 8080
+
+          The \`mxd_node_run\` wrapper sets LD_LIBRARY_PATH so the bundled
+          libuv/libuvwasi/libm3/liboqs are found without a global install.
+
+          See https://github.com/${{ github.repository }} for full docs.
+          README
+
+          tar czf "${STAGE}.tar.gz" "$STAGE"
+          sha256sum "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+          echo "Bundle ready: ${STAGE}.tar.gz"
+          ls -lh "${STAGE}.tar.gz"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign bundle with cosign (keyless)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          STAGE="mxd-${{ github.ref_name }}-${{ matrix.triplet }}"
+          cosign sign-blob --yes \
+            --output-signature "${STAGE}.tar.gz.sig" \
+            --output-certificate "${STAGE}.tar.gz.cert" \
+            "${STAGE}.tar.gz"
+
+      - name: Upload artifacts for release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.triplet }}
+          path: |
+            mxd-${{ github.ref_name }}-${{ matrix.triplet }}.tar.gz
+            mxd-${{ github.ref_name }}-${{ matrix.triplet }}.tar.gz.sha256
+            mxd-${{ github.ref_name }}-${{ matrix.triplet }}.tar.gz.sig
+            mxd-${{ github.ref_name }}-${{ matrix.triplet }}.tar.gz.cert
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Collect per-arch bundles + create the GitHub Release with all assets.
+  # ──────────────────────────────────────────────────────────────────────
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build-binary-release, docker-publish-sign]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all bundle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: bundle-*
+          merge-multiple: true
+
+      - name: Combine SHA256SUMS
+        working-directory: release-assets
+        run: |
+          cat *.sha256 > SHA256SUMS
+          ls -lh
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          # Pull the section between "## [${TAG#v}]" and the next "## [" line.
+          TAG="${{ github.ref_name }}"
+          VER="${TAG#v}"
+          awk "/^## \\[${VER}\\]/{flag=1; next} /^## \\[/{flag=0} flag" CHANGELOG.md > NOTES.md
+          if [ ! -s NOTES.md ]; then
+            echo "Release ${TAG}" > NOTES.md
+          fi
+          echo "notes_path=NOTES.md" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release with bundles + signatures
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: MXD ${{ github.ref_name }}
+          body_path: NOTES.md
+          draft: false
+          prerelease: false
+          files: |
+            release-assets/*.tar.gz
+            release-assets/*.tar.gz.sha256
+            release-assets/*.tar.gz.sig
+            release-assets/*.tar.gz.cert
+            release-assets/SHA256SUMS

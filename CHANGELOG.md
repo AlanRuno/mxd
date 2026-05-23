@@ -14,6 +14,61 @@ versions track the C library and tooling as a whole.
 
 ---
 
+## [0.2.2] — Distributable releases (prebuilt binaries + Docker)
+
+Operator onboarding goes from ~10-20 min ("compile everything from
+source") to ~30 seconds ("download + extract + run") for the common
+case. No functional changes to libmxd, chain consensus, or wire format.
+
+### Added
+
+- **`.github/workflows/ci.yml`** — two new jobs on tag pushes:
+  - `build-binary-release` — matrix-builds release tarballs natively
+    on `ubuntu-24.04` (x86_64) and `ubuntu-24.04-arm` (arm64). Each
+    bundle contains `bin/mxd_node` + `bin/mxd_node_run` wrapper +
+    `lib/{libmxd, libuv, libuvwasi, libm3, liboqs}.so*` + bundled
+    `config/default_config.json` + the README + apt prereq line for
+    runtime-only system libs. Each tarball is SHA256-summed and
+    cosign-signed (keyless / OIDC).
+  - `publish-release` — collects the per-arch bundles, generates a
+    combined `SHA256SUMS`, extracts release notes from `CHANGELOG.md`,
+    and uses `softprops/action-gh-release@v2` to create the GitHub
+    Release with all assets attached.
+- **Multi-arch Docker image** — the existing `docker-publish-sign`
+  job now builds `linux/amd64,linux/arm64` via `buildx` + QEMU and
+  pushes a single multi-arch manifest to
+  `ghcr.io/AlanRuno/mxd:vX.Y.Z` + `:latest`. Image is cosign-signed
+  (keyless) and ships with a CycloneDX SBOM.
+- **`letsgo`** — rewritten to be **prebuilt-first** with three modes:
+  - default: `curl` the latest release tarball for `$(uname -m)`,
+    verify SHA256, extract under `./mxd-prebuilt/`, run via
+    `mxd_node_run` (which sets `LD_LIBRARY_PATH` so the bundled
+    libuv/libuvwasi/libm3/liboqs are found without a global install).
+    Detects + auto-installs missing runtime system libs (`libssl3`,
+    `libsodium23`, `librocksdb6.11`, etc.) via apt on Debian/Ubuntu.
+  - `--docker`: `docker pull ghcr.io/AlanRuno/mxd:latest` and run
+    with the chain data dir bind-mounted.
+  - `--from-source`: legacy path, kept verbatim for auditors and
+    contributors who want to compile.
+  - Environment overrides: `MXD_RELEASE_TAG` (pin a version),
+    `MXD_INSTALL_DIR` (where to extract), `MXD_REPO`
+    (release source, default `AlanRuno/mxd`).
+- **`letsgo.bat`** — Windows wrapper now forwards extra args
+  (`--docker`, `--from-source`, `--reset`) through to the bash
+  script under MSYS2.
+
+### Notes
+
+- The mxdlib working tree's mainnet `v8_activation_height = 100`
+  (operator deploy value, commit `c38110b`) is **not** shipped to
+  public; the staged release tree keeps the `UINT32_MAX` placeholder
+  so downstream operators must still make a deliberate choice.
+- The `release-yml` chicken-and-egg: this release is itself the first
+  one to actually exercise the new workflow. The v0.2.2 tag push will
+  produce the initial set of binary tarballs + Docker manifest.
+
+---
+
 ## [0.2.1] — CI hardening + test bit-rot fixes
 
 No functional changes to libmxd, chain consensus, or wire format. All

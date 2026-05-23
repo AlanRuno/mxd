@@ -1,0 +1,269 @@
+#!/bin/bash
+# letsgo — one-command MXD node bring-up.
+#
+# Three modes, in order of speed:
+#
+#   ./letsgo testnet                  # default: download prebuilt release, run
+#   ./letsgo testnet --docker         # pull + run the GHCR Docker image
+#   ./letsgo testnet --from-source    # legacy: install deps + compile (~10-20 min)
+#
+# Other commands:
+#
+#   ./letsgo -reset                   # wipe local node data (asks confirmation)
+#   ./letsgo -reset /path/to/data     # wipe a specific data dir
+#   ./letsgo testnet --reset          # reset before starting
+#
+# Environment overrides:
+#   MXD_RELEASE_TAG     pin a specific release (default: latest)
+#   MXD_INSTALL_DIR     where to extract the bundle (default: ./mxd-prebuilt)
+#   MXD_REPO            release source (default: AlanRuno/mxd)
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+DEFAULT_REPO="AlanRuno/mxd"
+DEFAULT_INSTALL_DIR="$SCRIPT_DIR/mxd-prebuilt"
+REPO="${MXD_REPO:-$DEFAULT_REPO}"
+INSTALL_DIR="${MXD_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+
+# ─── helpers ────────────────────────────────────────────────────────────
+
+log()  { echo "[letsgo] $*"; }
+die()  { echo "[letsgo] ERROR: $*" >&2; exit 1; }
+
+reset_node_data() {
+    local data_dir="${1:-./data}"
+    local skip_confirm="${2:-false}"
+
+    log "MXD Node Data Reset"
+    log "  Data directory: $data_dir"
+    log "  Will delete: blockchain data, DHT peer table, rapid stake table, node identity keys"
+
+    if [ -d "$data_dir" ]; then
+        log "  Current size: $(du -sh "$data_dir" 2>/dev/null | cut -f1)"
+    else
+        log "  Data directory does not exist yet (nothing to delete)"
+    fi
+
+    if [ "$skip_confirm" != "true" ]; then
+        read -r -p "[letsgo] Confirm reset? (y/N): " confirm
+        case "$confirm" in
+            y|Y) ;;
+            *) log "Cancelled."; return 1 ;;
+        esac
+    fi
+
+    if [ -d "$data_dir" ]; then
+        rm -rf "$data_dir"
+    fi
+    mkdir -p "$data_dir"
+    log "Reset complete — node will start fresh with a new identity."
+    return 0
+}
+
+detect_arch() {
+    case "$(uname -m)" in
+        x86_64|amd64)   echo "linux-x86_64" ;;
+        aarch64|arm64)  echo "linux-arm64"  ;;
+        *) die "unsupported architecture: $(uname -m)" ;;
+    esac
+}
+
+# ─── -reset standalone ──────────────────────────────────────────────────
+
+if [ "${1:-}" == "-reset" ] || [ "${1:-}" == "--reset" ]; then
+    reset_node_data "${2:-./data}"
+    exit $?
+fi
+
+# ─── arg parse ──────────────────────────────────────────────────────────
+
+if [ -z "${1:-}" ]; then
+    cat <<EOF
+Usage: $0 <testnet|mainnet> [options]
+
+Options:
+  --docker            Run via Docker image from ghcr.io/${REPO}
+  --from-source       Compile everything from source (~10-20 min)
+  --reset             Wipe local node data before start
+  (none)              Default: download prebuilt release tarball + run
+
+Standalone reset:
+  $0 -reset                 # ./data
+  $0 -reset /path/to/data   # specific dir
+EOF
+    exit 1
+fi
+
+NETWORK_TYPE="$1"
+shift
+
+if [ "$NETWORK_TYPE" != "testnet" ] && [ "$NETWORK_TYPE" != "mainnet" ]; then
+    die "network must be 'testnet' or 'mainnet' (got '$NETWORK_TYPE')"
+fi
+
+MODE="prebuilt"
+RESET=0
+EXTRA_ARGS=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --docker)      MODE="docker"      ; shift ;;
+        --from-source) MODE="from-source" ; shift ;;
+        --reset|-reset) RESET=1           ; shift ;;
+        *) EXTRA_ARGS+=("$1") ; shift ;;
+    esac
+done
+
+log "MXD Node Quick Start ($MODE, $NETWORK_TYPE)"
+
+# ─── mode: docker ───────────────────────────────────────────────────────
+
+run_docker() {
+    command -v docker >/dev/null 2>&1 || die "docker not installed — try '--from-source' or install Docker first"
+
+    local image="ghcr.io/${REPO}:${MXD_RELEASE_TAG:-latest}"
+    log "Pulling $image"
+    docker pull "$image"
+
+    local data_vol="$SCRIPT_DIR/data"
+    mkdir -p "$data_vol"
+
+    if [ $RESET -eq 1 ]; then
+        reset_node_data "$data_vol" "true"
+    fi
+
+    log "Starting container (network=$NETWORK_TYPE, http :8080, p2p :8000)"
+    exec docker run --rm -it \
+        --name "mxd-node-$NETWORK_TYPE" \
+        -p 8080:8080 -p 8000:8000 \
+        -v "$data_vol:/opt/mxd/data" \
+        -e MXD_NETWORK="$NETWORK_TYPE" \
+        "$image" "${EXTRA_ARGS[@]}"
+}
+
+# ─── mode: prebuilt ─────────────────────────────────────────────────────
+
+run_prebuilt() {
+    command -v curl >/dev/null 2>&1 || die "curl not installed (apt-get install -y curl)"
+    command -v tar  >/dev/null 2>&1 || die "tar not installed"
+
+    local arch tag api_url asset_url tarball bundle_dir
+    arch="$(detect_arch)"
+
+    # Resolve tag (default: latest release)
+    if [ -n "${MXD_RELEASE_TAG:-}" ]; then
+        tag="$MXD_RELEASE_TAG"
+    else
+        log "Resolving latest release from github.com/${REPO}"
+        tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+               | grep -oE '"tag_name": *"[^"]+"' | head -1 | cut -d'"' -f4)"
+        [ -n "$tag" ] || die "could not resolve latest release tag — try --from-source"
+    fi
+    log "Release: $tag ($arch)"
+
+    tarball="mxd-${tag}-${arch}.tar.gz"
+    asset_url="https://github.com/${REPO}/releases/download/${tag}/${tarball}"
+    bundle_dir="$INSTALL_DIR/mxd-${tag}-${arch}"
+
+    if [ ! -d "$bundle_dir" ]; then
+        mkdir -p "$INSTALL_DIR"
+        log "Downloading $asset_url"
+        curl -fL --progress-bar -o "$INSTALL_DIR/$tarball"        "$asset_url"
+        curl -fL --progress-bar -o "$INSTALL_DIR/$tarball.sha256" "${asset_url}.sha256"
+
+        log "Verifying SHA256"
+        ( cd "$INSTALL_DIR" && sha256sum -c "$tarball.sha256" ) \
+            || die "checksum mismatch — refusing to extract"
+
+        log "Extracting"
+        tar -xzf "$INSTALL_DIR/$tarball" -C "$INSTALL_DIR"
+        rm -f "$INSTALL_DIR/$tarball" "$INSTALL_DIR/$tarball.sha256"
+    else
+        log "Bundle already extracted at $bundle_dir (reusing)"
+    fi
+
+    # One-time runtime-deps check (Debian/Ubuntu family only — best-effort)
+    if command -v dpkg >/dev/null 2>&1; then
+        local missing=""
+        for pkg in libssl3 libsodium23 librocksdb6.11 libcjson1 libcurl4 libminiupnpc17 libmicrohttpd12 libgmp10; do
+            dpkg -s "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
+        done
+        if [ -n "$missing" ]; then
+            log "Installing missing system libs:$missing (one-time, requires sudo)"
+            sudo apt-get update -qq
+            sudo apt-get install -y $missing
+        fi
+    fi
+
+    local cfg="$bundle_dir/config/default_config.json"
+    if [ -x "$bundle_dir/switch_network.sh" ]; then
+        "$bundle_dir/switch_network.sh" "$cfg" "$NETWORK_TYPE"
+    fi
+
+    local data_dir="$SCRIPT_DIR/data"
+    if [ $RESET -eq 1 ]; then
+        reset_node_data "$data_dir" "true"
+    fi
+
+    # Add --http-api 8080 on testnet if not already passed
+    if [ "$NETWORK_TYPE" = "testnet" ]; then
+        local has_http=0
+        for a in "${EXTRA_ARGS[@]}"; do
+            [ "$a" = "--http-api" ] && has_http=1
+        done
+        [ $has_http -eq 0 ] && [ -z "${MXD_HTTP_API_PORT:-}" ] && EXTRA_ARGS+=(--http-api 8080)
+    fi
+
+    log "Starting node (LD_LIBRARY_PATH points at bundled libs)"
+    exec "$bundle_dir/bin/mxd_node_run" "$cfg" "${EXTRA_ARGS[@]}"
+}
+
+# ─── mode: from-source (legacy) ─────────────────────────────────────────
+
+run_from_source() {
+    log "Step 1/5: Installing dependencies (~5-10 min on cold cache)"
+    cd "$SCRIPT_DIR"
+    ./install_dependencies.sh
+
+    log "Step 2/5: Cleaning build directory"
+    rm -rf build
+
+    log "Step 3/5: Building project (~3-5 min)"
+    mkdir build && cd build
+    cmake ..
+    make -j"$(nproc)" mxd_node || make -j"$(nproc)"
+    cd ..
+
+    log "Step 4/5: Configuring network ($NETWORK_TYPE)"
+    local cfg="build/lib/default_config.json"
+    ./switch_network.sh "$cfg" "$NETWORK_TYPE"
+
+    if [ $RESET -eq 1 ]; then
+        log "Step 4.5/5: Resetting node data"
+        reset_node_data "data" "true"
+    fi
+
+    log "Step 5/5: Starting node"
+    [ -f .env ] && source .env
+
+    if [ "$NETWORK_TYPE" = "testnet" ]; then
+        local has_http=0
+        for a in "${EXTRA_ARGS[@]}"; do
+            [ "$a" = "--http-api" ] && has_http=1
+        done
+        [ $has_http -eq 0 ] && [ -z "${MXD_HTTP_API_PORT:-}" ] && EXTRA_ARGS+=(--http-api 8080)
+    fi
+
+    exec ./build/lib/mxd_node "$cfg" "${EXTRA_ARGS[@]}"
+}
+
+# ─── dispatch ───────────────────────────────────────────────────────────
+
+case "$MODE" in
+    docker)      run_docker      ;;
+    prebuilt)    run_prebuilt    ;;
+    from-source) run_from_source ;;
+    *) die "unknown mode: $MODE" ;;
+esac
