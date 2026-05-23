@@ -219,6 +219,9 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+      - name: Lowercase repository name for GHCR
+        id: lc
+        run: echo "repo=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
       - name: Set up QEMU (multi-arch emulation for arm64 build)
         uses: docker/setup-qemu-action@v3
         with:
@@ -238,20 +241,20 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ steps.lc.outputs.repo }}:${{ github.ref_name }}
+            ghcr.io/${{ steps.lc.outputs.repo }}:latest
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
       - name: Sign container image with cosign (keyless)
         env:
           COSIGN_EXPERIMENTAL: "1"
         run: |
-          cosign sign --yes ghcr.io/${{ github.repository }}:${{ github.ref_name }} || true
-          cosign sign --yes ghcr.io/${{ github.repository }}:latest || true
+          cosign sign --yes ghcr.io/${{ steps.lc.outputs.repo }}:${{ github.ref_name }} || true
+          cosign sign --yes ghcr.io/${{ steps.lc.outputs.repo }}:latest || true
       - name: Generate SBOM for pushed image (CycloneDX)
         uses: anchore/sbom-action@v0.15.8
         with:
-          image: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          image: ghcr.io/${{ steps.lc.outputs.repo }}:${{ github.ref_name }}
           format: cyclonedx-json
           output-file: sbom-image-ghcr.cdx.json
           upload-artifact: false
@@ -439,7 +442,10 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────
   publish-release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [build-binary-release, docker-publish-sign]
+    # Only gates on the binary tarballs — Docker publishing is independent.
+    # If GHCR push has trouble (e.g., the lowercase-tag bug), we still want
+    # the GitHub Release to land with the tarballs so letsgo --prebuilt works.
+    needs: [build-binary-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write

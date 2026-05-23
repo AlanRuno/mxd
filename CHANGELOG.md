@@ -14,6 +14,39 @@ versions track the C library and tooling as a whole.
 
 ---
 
+## [0.2.4] — Fix the v0.2.3 release pipeline (round 2)
+
+v0.2.3's tag CI got further than v0.2.2's — `build-binary-release`
+produced both x86_64 and arm64 tarballs as workflow artifacts — but
+two issues then prevented the GitHub Release from being created:
+
+### Fixed
+
+- **GHCR push failed with "repository name must be lowercase"** —
+  the workflow used `${{ github.repository }}` (= `AlanRuno/mxd`)
+  directly in the image tag, but OCI registries reject uppercase.
+  Added a `lc` step that lowercases the repo once and reuses the
+  output in the build-push + cosign + SBOM steps.
+- **`publish-release` was skipped** because it `needs:
+  [build-binary-release, docker-publish-sign]` and Docker failed.
+  Decoupled: now `needs: [build-binary-release]` only. Docker
+  publishing is independent of the GitHub Release creation; if GHCR
+  has issues the tarballs still land so `letsgo` prebuilt path
+  works.
+- **`integration-test` failed** with `docker-compose.test.yml: no
+  such file or directory` — the file lives in mxdlib root but
+  wasn't in the public manifest. Now added.
+
+### Notes
+
+- Image will publish as `ghcr.io/alanruno/mxd:vX.Y.Z` (lowercase).
+- v0.2.3 tarballs do exist as workflow artifacts on
+  https://github.com/AlanRuno/mxd/actions but were never promoted
+  to a GitHub Release. v0.2.4 should be the first to land actual
+  Release assets that `letsgo` can download.
+
+---
+
 ## [0.2.3] — Fix the v0.2.2 release pipeline
 
 Patch on top of v0.2.2 to make the new prebuilt-release workflow
