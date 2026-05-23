@@ -14,6 +14,44 @@ versions track the C library and tooling as a whole.
 
 ---
 
+## [0.2.3] — Fix the v0.2.2 release pipeline
+
+Patch on top of v0.2.2 to make the new prebuilt-release workflow
+actually produce artifacts. v0.2.2 shipped but its tag-triggered CI
+failed before reaching `build-binary-release`, so no tarballs landed
+on the GitHub Release. v0.2.3 ships the same code as v0.2.2 plus the
+two release-pipeline fixes below.
+
+### Fixed
+
+- **Executable bit on shell scripts** — `install_dependencies*.sh`,
+  `letsgo`, and `switch_network.sh` were stored in git with mode
+  `100644` (non-executable) because the Windows-side `cp -r`
+  during release-tree sync silently strips the exec bit
+  (`core.filemode = false` on Windows git installs). The Linux CI
+  runner then refused to run them with exit 126 ("Permission
+  denied"). Now stamped to `100755` in the git tree via
+  `git update-index --chmod=+x`. Bug present since v0.1.0; CI on
+  public has been red on every release tag until now.
+- **`wasm3.pc.in` missing from public release tree** —
+  `install_dependencies_linux.sh` references `${SCRIPT_DIR}/wasm3.pc.in`
+  (a pkg-config template at repo root) before compiling wasm3 from
+  source. The manifest didn't include it, so even after the exec-bit
+  fix the wasm3 build step failed with `cp: cannot stat .../wasm3.pc.in`.
+  Now listed in `scripts/release/mxd-public-manifest.txt`.
+- **`RELEASE_PROCESS.md`** — codified the post-sync `git update-index
+  --chmod=+x` step for the six known-executable scripts, so this
+  doesn't recur on the next release.
+
+### Notes
+
+- v0.2.2 tarballs do NOT exist on the GitHub Release; `letsgo
+  testnet` would have returned a 404. v0.2.3 is the first version
+  that should actually produce downloadable artifacts when the tag
+  CI completes.
+
+---
+
 ## [0.2.2] — Distributable releases (prebuilt binaries + Docker)
 
 Operator onboarding goes from ~10-20 min ("compile everything from
