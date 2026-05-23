@@ -41,6 +41,11 @@ int mxd_verify_and_add_validation_signature(mxd_block_t *block,
 
 int mxd_check_block_relay_status(const uint8_t block_hash[64]);
 
+// Sign the given block with the local validator's identity, store the
+// updated chain to RocksDB, and broadcast it to peers. Defined in
+// mxd_blockchain_sync.c.
+int mxd_sign_and_broadcast_block(const mxd_block_t *block);
+
 int mxd_sync_rapid_table(mxd_rapid_table_t *table, const char *local_node_id);
 
 int mxd_handle_validation_chain_conflict(const uint8_t block_hash1[64],

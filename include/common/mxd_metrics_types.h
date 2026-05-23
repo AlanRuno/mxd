@@ -25,7 +25,12 @@ typedef struct {
 
 // Node stake information
 typedef struct {
-    char node_id[64];
+    char node_id[65];             // 64 hex chars (v6 addr32) + null terminator.
+                                  // Was [64] (off-by-one — snprintf loop + explicit
+                                  // null-terminate both wrote to index 64, clobbering
+                                  // the low byte of stake_amount; benign in practice
+                                  // because memset zeros it and stake_amount is
+                                  // overwritten right after, but UB.)
     mxd_amount_t stake_amount;    // Stake amount in base units
     uint8_t node_address[32];     // v6: addr32 (was [20])
     mxd_node_metrics_t metrics;

@@ -4,6 +4,8 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 // Test WebAssembly code (minimal module)
 #include "wasm_binary.h"
@@ -15,6 +17,14 @@ static void enable_contracts_for_testing(void) {
   if (!config_initialized) {
     mxd_set_default_config(&test_config);
     test_config.contracts.enabled = 1;
+    // Override data_dir to a CI-friendly tmp path. The default is "data"
+    // (relative) which may not exist in CI's working directory, causing
+    // mxd_contracts_db_init() to fail with -1 and bubble up to
+    // mxd_init_contracts(). RocksDB's create_if_missing only creates the
+    // database file itself, not parent dirs, so mkdir it explicitly.
+    snprintf(test_config.data_dir, sizeof(test_config.data_dir),
+             "/tmp/mxd-test-contracts-%d", (int)getpid());
+    mkdir(test_config.data_dir, 0755);
     mxd_set_global_config(&test_config);
     config_initialized = 1;
   }
@@ -23,6 +33,11 @@ static void enable_contracts_for_testing(void) {
 // Test input/output values
 #define TEST_INPUT_VALUE 5
 #define EXPECTED_OUTPUT_VALUE 47 // 5 + 42 (from WebAssembly code)
+
+// Dummy 20-byte deployer address used in test calls (smart contracts are
+// disabled in production anyway; the value is unused beyond signature
+// satisfaction).
+static const uint8_t TEST_DEPLOYER[20] = {0};
 
 static void test_contract_initialization(void) {
   TEST_START("Contract Initialization");
@@ -43,7 +58,7 @@ static void test_contract_deployment(void) {
 
   // Deploy contract
   TEST_VALUE("Contract size", "%zu", sizeof(test_wasm));
-  TEST_ASSERT(mxd_deploy_contract(test_wasm, sizeof(test_wasm), &state) == 0, "Contract deployment successful");
+  TEST_ASSERT(mxd_deploy_contract(test_wasm, sizeof(test_wasm), TEST_DEPLOYER, &state) == 0, "Contract deployment successful");
 
   // Verify contract hash
   TEST_ARRAY("Contract hash", state.contract_hash, 64);
@@ -70,7 +85,7 @@ static void test_contract_execution(void) {
   TEST_VALUE("Input value", "%u", input);
   
   // Deploy and execute contract
-  TEST_ASSERT(mxd_deploy_contract(test_wasm, test_wasm_len, &state) == 0, "Contract deployment successful");
+  TEST_ASSERT(mxd_deploy_contract(test_wasm, test_wasm_len, TEST_DEPLOYER, &state) == 0, "Contract deployment successful");
   TEST_ASSERT(mxd_execute_contract(&state, (uint8_t *)&input, sizeof(input),
                               &result) == 0, "Contract execution successful");
 
@@ -95,7 +110,7 @@ static void test_contract_storage(void) {
   enable_contracts_for_testing();
   
   // Deploy contract
-  TEST_ASSERT(mxd_deploy_contract(test_wasm, sizeof(test_wasm), &state) == 0, "Contract deployment successful");
+  TEST_ASSERT(mxd_deploy_contract(test_wasm, sizeof(test_wasm), TEST_DEPLOYER, &state) == 0, "Contract deployment successful");
 
   // Set storage
   TEST_ARRAY("Storage key", key, sizeof(key));
@@ -123,7 +138,7 @@ static void test_state_transition(void) {
   enable_contracts_for_testing();
   
   // Deploy contract
-  TEST_ASSERT(mxd_deploy_contract(test_wasm, test_wasm_len, &old_state) == 0, "Initial contract deployment successful");
+  TEST_ASSERT(mxd_deploy_contract(test_wasm, test_wasm_len, TEST_DEPLOYER, &old_state) == 0, "Initial contract deployment successful");
 
   // Create new state - copy hash and module, but create fresh storage
   TEST_VALUE("Creating new state", "%s", "deep copy with shared module");
@@ -174,12 +189,19 @@ static void test_contracts_disabled_by_default(void) {
   uint32_t input = TEST_INPUT_VALUE;
   
   TEST_START("Contracts Disabled By Default");
-  
-  mxd_set_default_config(&disabled_config);
+
+  // disabled_config is already zero-initialized at function entry; calling
+  // mxd_set_default_config here would overwrite contracts.enabled with the
+  // built-in default (1), defeating the test's intent. Just push the zero
+  // struct straight to global config.
   mxd_set_global_config(&disabled_config);
-  
-  TEST_ASSERT(mxd_init_contracts() == -1, "mxd_init_contracts returns -1 when disabled");
-  TEST_ASSERT(mxd_deploy_contract(test_wasm, sizeof(test_wasm), &state) == -1, "mxd_deploy_contract returns -1 when disabled");
+
+  // mxd_init_contracts() returns 0 even when contracts are disabled — see
+  // src/mxd_smart_contracts.c "FIX: Disabled is a valid state, not an error".
+  // The downstream functions (deploy/execute/storage/validate) are what
+  // actually short-circuit with -1 when disabled.
+  TEST_ASSERT(mxd_init_contracts() == 0, "mxd_init_contracts returns 0 (disabled is a valid state)");
+  TEST_ASSERT(mxd_deploy_contract(test_wasm, sizeof(test_wasm), TEST_DEPLOYER, &state) == -1, "mxd_deploy_contract returns -1 when disabled");
   TEST_ASSERT(mxd_execute_contract(&state, (uint8_t *)&input, sizeof(input), &result) == -1, "mxd_execute_contract returns -1 when disabled");
   TEST_ASSERT(mxd_validate_state_transition(&state, &state) == -1, "mxd_validate_state_transition returns -1 when disabled");
   TEST_ASSERT(mxd_calculate_gas(test_wasm, sizeof(test_wasm)) == 0, "mxd_calculate_gas returns 0 when disabled");

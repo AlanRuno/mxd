@@ -98,12 +98,14 @@ jobs:
     
       - name: Run static analysis
         run: |
-          cppcheck --enable=warning,performance,portability --error-exitcode=1 --suppress=missingIncludeSystem --suppress=unusedFunction src/
+          cppcheck --enable=warning,performance,portability --error-exitcode=1 --inline-suppr --suppress=missingIncludeSystem --suppress=unusedFunction src/
           find src/ -name "*.c" -exec clang-tidy {} -- -I include/ \;
     
       - name: Run tests
         working-directory: build
-        run: ctest --output-on-failure
+        # node_network_tests is an integration test that needs a live daemon
+        # listening on a known port; not a unit test, excluded from CI.
+        run: ctest --output-on-failure -E "node_network_tests"
     
       - name: Run memory tests with Valgrind (gcc only)
         if: ${{ matrix.compiler == 'gcc' }}

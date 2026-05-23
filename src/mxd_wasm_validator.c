@@ -384,7 +384,11 @@ int mxd_validate_wasm_determinism(const uint8_t *bytecode, size_t size,
 
                 // Check instructions
                 while (ptr < body_end) {
-                    // SECURITY FIX: Check bounds before reading opcode
+                    // SECURITY FIX: Check bounds before reading opcode.
+                    // Defensive: redundant with the while-condition right now,
+                    // but kept so a future loop-body edit that advances ptr
+                    // mid-iteration can't underflow the read at line 390.
+                    // cppcheck-suppress oppositeInnerCondition
                     if (ptr >= body_end) break;
 
                     uint8_t opcode = *ptr;

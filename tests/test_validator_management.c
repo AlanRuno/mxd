@@ -4,16 +4,19 @@
 #include "../include/mxd_blockchain.h"
 #include "../include/mxd_block_proposer.h"
 #include "../include/mxd_logging.h"
+#include "../include/mxd_address.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 // Mock balance for testing
 static mxd_amount_t mock_balance = 0;
 
-// Override mxd_get_balance for testing
-mxd_amount_t mxd_get_balance(const uint8_t address[20]) {
+// Override mxd_get_balance for testing — v6 addr32 (was [20] pre-v6).
+mxd_amount_t mxd_get_balance(const uint8_t address[32]) {
+    (void)address;
     return mock_balance;
 }
 
@@ -24,14 +27,20 @@ void test_validator_join_with_sufficient_stake(void) {
     mxd_amount_t total_supply = 1000000000000000ULL; // 10M MXD (8 decimals)
     mxd_amount_t required_stake = total_supply / 1000; // 0.10%
 
-    uint8_t test_addr[20] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A,
-                             0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14};
     uint8_t test_pubkey[32];
     uint8_t test_privkey[64];
 
     // Generate test keypair
     if (mxd_sig_keygen(MXD_SIGALG_ED25519, test_pubkey, test_privkey) != 0) {
         printf("FAILED: Could not generate test keypair\n");
+        return;
+    }
+
+    // v6: derive the canonical addr32 from the pubkey so the addr<->pubkey
+    // binding check inside mxd_validate_join_request passes.
+    uint8_t test_addr[32];
+    if (mxd_derive_address(MXD_SIGALG_ED25519, test_pubkey, 32, test_addr) != 0) {
+        printf("FAILED: Could not derive test addr32\n");
         return;
     }
 
@@ -54,11 +63,13 @@ void test_validator_join_with_sufficient_stake(void) {
     size_t count = 0;
     mxd_get_pending_join_requests(&requests, &count);
     assert(count == 1);
-    assert(memcmp(requests[0].node_address, test_addr, 20) == 0);
+    assert(memcmp(requests[0].node_address, test_addr, 32) == 0);
 
     // Validate request
     result = mxd_validate_join_request(&requests[0], total_supply);
     assert(result == 0);
+
+    free(requests);  // mxd_get_pending_join_requests allocates; caller frees.
 
     printf("✓ test_validator_join_with_sufficient_stake passed\n");
 }
@@ -69,15 +80,18 @@ void test_validator_join_insufficient_stake(void) {
     mxd_amount_t total_supply = 1000000000000000ULL;
     mxd_amount_t required_stake = total_supply / 1000;
 
-    uint8_t test_addr[20] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A,
-                             0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14};
+    // v6 addr32 — 32-byte address. Was [20] pre-v6.
+    uint8_t test_addr[32] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A,
+                             0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14,
+                             0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
+                             0x1F, 0x20};
 
     // Mock insufficient balance
     mock_balance = required_stake - 1000;
 
     mxd_validator_join_request_t request;
     memset(&request, 0, sizeof(request));
-    memcpy(request.node_address, test_addr, 20);
+    memcpy(request.node_address, test_addr, 32);
     request.stake_amount = mock_balance;
     request.algo_id = MXD_SIGALG_ED25519;
 
@@ -98,24 +112,29 @@ void test_liveness_tracking(void) {
     table.count = 3;
     table.nodes = calloc(10, sizeof(mxd_node_stake_t*));
 
-    // Add validators
-    uint8_t addr1[20] = {0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
-                         0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01};
-    uint8_t addr2[20] = {0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02,
-                         0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02};
-    uint8_t addr3[20] = {0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03,
-                         0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03};
+    // Add validators (v6 addr32 — 32-byte addresses; pre-v6 the test used
+    // 20-byte arrays which silently overran on memcpy into the 32-byte
+    // node_address field and caused liveness tracking to fail to match
+    // by-address).
+    uint8_t addr1[32]; memset(addr1, 0x01, 32);
+    uint8_t addr2[32]; memset(addr2, 0x02, 32);
+    uint8_t addr3[32]; memset(addr3, 0x03, 32);
 
     table.nodes[0] = calloc(1, sizeof(mxd_node_stake_t));
     table.nodes[1] = calloc(1, sizeof(mxd_node_stake_t));
     table.nodes[2] = calloc(1, sizeof(mxd_node_stake_t));
 
-    memcpy(table.nodes[0]->node_address, addr1, 20);
-    memcpy(table.nodes[1]->node_address, addr2, 20);
-    memcpy(table.nodes[2]->node_address, addr3, 20);
+    memcpy(table.nodes[0]->node_address, addr1, 32);
+    memcpy(table.nodes[1]->node_address, addr2, 32);
+    memcpy(table.nodes[2]->node_address, addr3, 32);
 
-    // Simulate 10 consecutive misses for validator 1 (addr1)
-    for (uint32_t height = 100; height < 110; height++) {
+    // Simulate enough misses for at least one validator to cross
+    // MXD_MAX_CONSECUTIVE_MISSES. With 3 validators in round-robin, each
+    // validator is the expected proposer once every 3 heights, so we need
+    // to run ≥ 3 * MXD_MAX_CONSECUTIVE_MISSES heights to accumulate
+    // MXD_MAX_CONSECUTIVE_MISSES misses for any single one.
+    uint32_t end_height = 100 + 3 * MXD_MAX_CONSECUTIVE_MISSES + 5;
+    for (uint32_t height = 100; height < end_height; height++) {
         // Expected proposer: height % 3
         uint32_t expected_idx = height % 3;
         uint8_t *expected_addr = (expected_idx == 0) ? addr1 : (expected_idx == 1) ? addr2 : addr3;
@@ -129,7 +148,7 @@ void test_liveness_tracking(void) {
     // Check if validator marked for removal
     uint8_t *to_remove = NULL;
     size_t remove_count = 0;
-    mxd_get_validators_to_remove(&table, 110, &to_remove, &remove_count);
+    mxd_get_validators_to_remove(&table, end_height, &to_remove, &remove_count);
 
     assert(remove_count > 0);
 
@@ -155,9 +174,11 @@ void test_proposer_timeout_fallback(void) {
     // Primary proposer: height % validator_count = 100 % 5 = 0
     uint32_t primary_idx = 0;
 
-    // Start timeout
-    uint8_t primary_addr[20] = {0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
-                                0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA};
+    // Start timeout. v6 addr32 — 32-byte address. Was [20] pre-v6;
+    // mxd_start_height_timeout reads 32 bytes so the [20] caused an
+    // ASAN stack-buffer-overflow in the clang sanitizer CI lane.
+    uint8_t primary_addr[32];
+    memset(primary_addr, 0xAA, 32);
     mxd_start_height_timeout(height, primary_addr);
 
     // Initially timeout should not be expired

@@ -146,7 +146,6 @@ int mxd_find_common_ancestor(uint32_t height_a, const uint8_t hash_a[64],
             uint8_t prev_hash[64];
             memcpy(prev_hash, blk.prev_block_hash, 64);
             mxd_free_block(&blk);
-            if (cur_h == 0) break;
             cur_h--;
             memcpy(cur_hash, prev_hash, 64);
             if (a_count >= cap) break;  /* safety */
