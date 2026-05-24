@@ -184,18 +184,13 @@ run_prebuilt() {
         log "Bundle already extracted at $bundle_dir (reusing)"
     fi
 
-    # One-time runtime-deps check (Debian/Ubuntu family only — best-effort)
-    if command -v dpkg >/dev/null 2>&1; then
-        local missing=""
-        for pkg in libssl3 libsodium23 librocksdb6.11 libcjson1 libcurl4 libminiupnpc17 libmicrohttpd12 libgmp10; do
-            dpkg -s "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
-        done
-        if [ -n "$missing" ]; then
-            log "Installing missing system libs:$missing (one-time, requires sudo)"
-            sudo apt-get update -qq
-            sudo apt-get install -y $missing
-        fi
-    fi
+    # NOTE: no apt prereq install. The bundle is self-contained — every
+    # runtime .so (libssl, libsodium, librocksdb, libcurl + sub-deps,
+    # libminiupnpc, libmicrohttpd, libgmp, libcjson, libzstd, libuv,
+    # libuvwasi, libm3, liboqs) is shipped inside the bundle's lib/ dir
+    # and loaded via LD_LIBRARY_PATH by the mxd_node_run wrapper. Only
+    # the host's glibc + kernel are required. Works on any Linux with
+    # glibc ≥ 2.35.
 
     local cfg="$bundle_dir/config/default_config.json"
     if [ -x "$bundle_dir/switch_network.sh" ]; then

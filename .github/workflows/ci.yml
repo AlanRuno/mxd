@@ -314,14 +314,21 @@ jobs:
           # Add smoke test steps here
 
   # ──────────────────────────────────────────────────────────────────────
-  # Binary release: cross-arch tarballs published as GitHub Release assets.
-  # Runs ONLY on tag push (vX.Y.Z). Bundles mxd_node + libmxd.so + the
-  # source-built deps that letsgo would otherwise compile from scratch
-  # (libuv, libuvwasi, libm3/wasm3, liboqs) so end operators just download
-  # + extract + run instead of waiting 10-20 min for compilation.
-  # System libs (libssl3, libsodium23, librocksdb, etc.) are NOT bundled
-  # — they ship on every supported Ubuntu and letsgo installs them via
-  # apt as a one-line prereq check.
+  # Binary release: cross-arch SELF-CONTAINED tarballs as GitHub Release
+  # assets. Runs ONLY on tag push (vX.Y.Z).
+  #
+  # Bundles mxd_node + libmxd.so + the source-built deps (libuv, libuvwasi,
+  # libm3, liboqs) AND every system .so transitively required at runtime
+  # (libssl, libcrypto, libsodium, librocksdb, libcurl + its sub-deps,
+  # libminiupnpc, libmicrohttpd, libgmp, libcjson, libzstd, …) — basically
+  # everything ldd-resolves EXCEPT glibc components (libc, libm, libpthread,
+  # libdl, librt, ld-linux, vdso), which are kernel-coupled and must come
+  # from the host system.
+  #
+  # Build runner pinned to ubuntu-22.04 (glibc 2.35). The resulting binary
+  # runs on any Linux with glibc ≥ 2.35: Ubuntu 22.04+, Debian 12+, Fedora
+  # 36+, Rocky 9+, openSUSE Tumbleweed, Arch (rolling), Alpine 3.18+ with
+  # gcompat. No apt prereq from letsgo — the bundle is fully portable.
   # ──────────────────────────────────────────────────────────────────────
   build-binary-release:
     if: startsWith(github.ref, 'refs/tags/')
@@ -333,12 +340,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
+          - runner: ubuntu-22.04
             arch: x86_64
             triplet: linux-x86_64
-          - runner: ubuntu-24.04-arm
+            libdir: /usr/lib/x86_64-linux-gnu
+          - runner: ubuntu-22.04-arm
             arch: aarch64
             triplet: linux-arm64
+            libdir: /usr/lib/aarch64-linux-gnu
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -362,7 +371,7 @@ jobs:
           cmake -DCMAKE_BUILD_TYPE=Release ..
           make -j$(nproc) mxd_node
 
-      - name: Stage release bundle
+      - name: Stage release bundle (recursive ldd, glibc excluded)
         run: |
           set -euo pipefail
           STAGE="mxd-${{ github.ref_name }}-${{ matrix.triplet }}"
@@ -372,15 +381,73 @@ jobs:
           cp build/lib/mxd_node       "$STAGE/bin/"
           cp build/lib/libmxd.so      "$STAGE/lib/"
 
-          # Source-built deps that aren't in apt — bundle so the operator
-          # doesn't need to recompile them. Wildcards cover .so / .so.N /
-          # .so.N.M.K symlinks; cp -P preserves symlinks.
-          for so in libuv libuvwasi libm3 liboqs; do
-            cp -P /usr/local/lib/${so}.so* "$STAGE/lib/" 2>/dev/null || true
-          done
+          # Recursive .so bundler. Walks ldd on mxd_node + libmxd.so, then
+          # on each newly-bundled .so, until fixed point. Skips glibc
+          # components (kernel-coupled, must come from host) and the linker
+          # itself.
+          should_skip() {
+              case "$1" in
+                  */libc.so.*|*/libc-*|*/libm.so.*|*/libm-*) return 0 ;;
+                  */libpthread.so.*|*/libpthread-*) return 0 ;;
+                  */libdl.so.*|*/libdl-*) return 0 ;;
+                  */librt.so.*|*/librt-*) return 0 ;;
+                  */libresolv.so.*) return 0 ;;
+                  */libnsl.so.*) return 0 ;;
+                  */libutil.so.*) return 0 ;;
+                  */ld-linux*|*linux-vdso*) return 0 ;;
+                  *) return 1 ;;
+              esac
+          }
+
+          bundle_one() {
+              local src="$1"
+              local base
+              base="$(basename "$src")"
+              [ -e "$STAGE/lib/$base" ] && return 0    # already bundled
+              cp -L "$src" "$STAGE/lib/$base"          # follow symlinks → real file
+              # Recurse: ldd the just-bundled lib and bundle its deps too
+              local dep
+              while IFS= read -r dep; do
+                  [ -z "$dep" ] && continue
+                  should_skip "$dep" && continue
+                  bundle_one "$dep"
+              done < <(ldd "$STAGE/lib/$base" 2>/dev/null | awk '/=> \// {print $3}')
+          }
+
+          # Seed with mxd_node + libmxd.so (libmxd already copied above).
+          while IFS= read -r dep; do
+              [ -z "$dep" ] && continue
+              should_skip "$dep" && continue
+              bundle_one "$dep"
+          done < <(ldd "$STAGE/bin/mxd_node" 2>/dev/null | awk '/=> \// {print $3}')
+
+          # libmxd.so itself wasn't bundled by the recursion (we put it
+          # directly). Run ldd on it too to catch any extra deps.
+          while IFS= read -r dep; do
+              [ -z "$dep" ] && continue
+              should_skip "$dep" && continue
+              bundle_one "$dep"
+          done < <(LD_LIBRARY_PATH="$STAGE/lib" ldd "$STAGE/lib/libmxd.so" 2>/dev/null | awk '/=> \// {print $3}')
+
+          # Recreate SONAME symlinks. cp -L gave us the real files; many
+          # libs are loaded by short SONAME (libssl.so.3 → libssl.so.3.x.y).
+          # Build the chain: libfoo.so.X.Y.Z → libfoo.so.X → libfoo.so
+          ( cd "$STAGE/lib" && \
+            for real in *.so.*.*; do
+                [ -f "$real" ] || continue
+                # libssl.so.3.0.2 → soname libssl.so.3
+                soname=$(echo "$real" | sed -E 's/(\.so\.[0-9]+).*/\1/')
+                [ -e "$soname" ] || ln -s "$real" "$soname"
+                base=$(echo "$real" | sed -E 's/(\.so)\..*/\1/')
+                [ -e "$base" ] || ln -s "$soname" "$base"
+            done
+          )
+
+          echo "Bundle libs:"
+          ls -lh "$STAGE/lib/" | head -30
 
           # Operator-facing helper to launch the node with the bundled
-          # libs resolved via LD_LIBRARY_PATH — no global install needed.
+          # libs resolved via LD_LIBRARY_PATH — no global install, no apt.
           cat > "$STAGE/bin/mxd_node_run" <<'WRAP'
           #!/bin/sh
           DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -394,22 +461,29 @@ jobs:
           cp src/node/default_config.json "$STAGE/config/"
           cp switch_network.sh "$STAGE/" 2>/dev/null || true
 
-          # README that documents the bundle layout + apt prereq line.
+          # README that documents the bundle layout — fully self-contained.
           cat > "$STAGE/README.md" <<README
           # MXD prebuilt bundle — ${{ github.ref_name }} (${{ matrix.triplet }})
 
           ## Quick start
 
-              # 1. Install runtime system libs (one-time, Ubuntu/Debian):
-              sudo apt-get install -y libssl3 libsodium23 librocksdb6.11 \\
-                  libcjson1 libcurl4 libminiupnpc17 libmicrohttpd12 libgmp10
-
-              # 2. Pick a network + start:
+              # 1. Pick a network:
               ./switch_network.sh config/default_config.json testnet
+
+              # 2. Start the node:
               ./bin/mxd_node_run config/default_config.json --http-api 8080
 
-          The \`mxd_node_run\` wrapper sets LD_LIBRARY_PATH so the bundled
-          libuv/libuvwasi/libm3/liboqs are found without a global install.
+          That's it. The \`mxd_node_run\` wrapper sets LD_LIBRARY_PATH so
+          every runtime dependency (libssl, libsodium, librocksdb, libcurl,
+          libuv, libuvwasi, libm3, liboqs, …) is loaded from the bundled
+          \`lib/\` directory. No \`apt install\` required.
+
+          ## Requirements
+
+          - Linux kernel ≥ 5.4
+          - glibc ≥ 2.35 (Ubuntu 22.04+, Debian 12+, Fedora 36+, Rocky 9+,
+            openSUSE Tumbleweed, Arch, Alpine 3.18+ with gcompat).
+          - For \`--http-api\`: port 8080 free; for P2P: port 8000.
 
           See https://github.com/${{ github.repository }} for full docs.
           README

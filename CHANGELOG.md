@@ -14,6 +14,67 @@ versions track the C library and tooling as a whole.
 
 ---
 
+## [0.2.6] — Self-contained bundle (works on any modern Linux)
+
+End-to-end smoke test of `letsgo testnet` on a clean Ubuntu 24.04 VM
+exposed two distribution bugs:
+
+1. **`letsgo` apt prereq was hardcoded `librocksdb6.11`** (the 22.04
+   package name). Ubuntu 24.04 ships `librocksdb8.9`, Debian 12 ships
+   `librocksdb7.8`, etc. Apt install failed with `Unable to locate
+   package librocksdb6.11`.
+2. **`mxd_node` crashed with a rocksdb assertion** (`SaveError: errptr
+   != nullptr`) on Ubuntu 24.04. libmxd's chain code passes `NULL` for
+   the rocksdb `char** errptr` parameter, which rocksdb 6.x tolerates
+   (mainnet runs 22.04/6.11) but rocksdb 8.x asserts-aborts.
+
+v0.2.6 fixes the distribution surface so both problems go away without
+touching the chain code. The libmxd-side NULL-errptr issue is real and
+worth fixing eventually, but it doesn't affect operators using these
+bundles.
+
+### Changed
+
+- **Build matrix pinned to `ubuntu-22.04` (and `ubuntu-22.04-arm`).**
+  glibc 2.35 baseline — forward-compatible with 24.04, Debian 12,
+  Fedora 36+, Rocky 9+, Arch (rolling), Alpine 3.18+ (with gcompat).
+  Also matches the mainnet validators' OS so the shipped binary is
+  byte-compatible with production.
+- **Bundle is now self-contained** via recursive `ldd` traversal in
+  the `Stage release bundle` step. Every dynamic dependency of
+  `mxd_node` and `libmxd.so` is bundled into `lib/` — including
+  `libssl`, `libcrypto`, `libsodium`, `librocksdb` (6.11 matching
+  mainnet, no 8.x assert issue), `libcurl` and its sub-deps
+  (`libnghttp2`, `libidn2`, `librtmp`, `libssh`, `libpsl`,
+  `libgssapi_krb5`, `libldap`, `liblber`), `libminiupnpc`,
+  `libmicrohttpd`, `libgmp`, `libcjson`, `libzstd`, on top of the
+  source-built `libuv`, `libuvwasi`, `libm3`, `liboqs`. Glibc
+  components (`libc`, `libm`, `libpthread`, `libdl`, `librt`,
+  `ld-linux`, vdso) are intentionally excluded — they're kernel-
+  coupled and must come from the host.
+- **SONAME symlinks reconstructed** in the bundle. `cp -L` flattens
+  the symlink chain, so the bundle step rebuilds
+  `libfoo.so → libfoo.so.X → libfoo.so.X.Y.Z` so loaders find each
+  lib by its SONAME at runtime.
+- **`letsgo` no longer runs `apt-get install`**. The bundle has every
+  .so it needs; the wrapper's `LD_LIBRARY_PATH=bundle/lib` wins over
+  the system's `/usr/lib/.../`. Removes the entire class of "apt
+  package name doesn't exist on this distro" bugs.
+- **Bundle README simplified** to a 2-step quick-start (no apt line).
+
+### Notes
+
+- Tarball size grows from ~3 MB → estimated ~30–50 MB compressed
+  (~15 extra .so files). Trade-off accepted for distro portability.
+- Operators on Ubuntu 22.04 will see the bundled libs slightly
+  duplicated against system libs, but the bundle ones win — no
+  conflict, just a few MB of disk.
+- Mainnet validators continue to use the source-built path (via
+  `install_dependencies.sh` + `letsgo --from-source` or direct
+  cmake) and are unaffected by the bundle changes.
+
+---
+
 ## [0.2.5] — Unbreak Docker (anchore/sbom-action @v0.15.8 → @v0)
 
 ### Fixed
