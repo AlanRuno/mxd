@@ -14,6 +14,33 @@ versions track the C library and tooling as a whole.
 
 ---
 
+## [0.2.5] — Unbreak Docker (anchore/sbom-action @v0.15.8 → @v0)
+
+### Fixed
+
+- **`docker-build` failed** on v0.2.4 at "Generate SBOM for source" with
+  `received HTTP status=404 for url='https://get.anchore.io/syft/v0.103.1/install.sh'`.
+  The pinned `anchore/sbom-action@v0.15.8` is bundled with a syft
+  version that Anchore has since deleted/moved upstream. Bumped all
+  three usage sites (source SBOM in `docker-build`, image SBOM in
+  `docker-build`, image SBOM in `docker-publish-sign`) to
+  `@v0` (the moving major-tag pointer Anchore maintains as stable).
+- **SBOM steps now non-blocking** via `continue-on-error: true`.
+  CycloneDX SBOMs are supply-chain-transparency metadata, not
+  gating on Docker image functionality — if the SBOM action breaks
+  again upstream, Docker push should still complete. The Upload
+  SBOM step is gated on `hashFiles(...)` so it skips cleanly when
+  the SBOM file wasn't produced.
+
+### Notes
+
+- v0.2.4 binary tarballs landed correctly and are still the
+  recommended `letsgo testnet` target until v0.2.5 supersedes them.
+- Docker image was never produced for v0.2.2 / v0.2.3 / v0.2.4. v0.2.5
+  should be the first version with `ghcr.io/alanruno/mxd:vX.Y.Z` live.
+
+---
+
 ## [0.2.4] — Fix the v0.2.3 release pipeline (round 2)
 
 v0.2.3's tag CI got further than v0.2.2's — `build-binary-release`

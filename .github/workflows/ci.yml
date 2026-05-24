@@ -179,14 +179,16 @@ jobs:
           no-cache: true
 
       - name: Generate SBOM for source (CycloneDX)
-        uses: anchore/sbom-action@v0.15.8
+        uses: anchore/sbom-action@v0
+        continue-on-error: true   # SBOM is supply-chain transparency, not gating
         with:
           path: .
           format: cyclonedx-json
           output-file: sbom-source.cdx.json
           upload-artifact: false
       - name: Generate SBOM for Docker image (CycloneDX)
-        uses: anchore/sbom-action@v0.15.8
+        uses: anchore/sbom-action@v0
+        continue-on-error: true
         with:
           image: mxdlib:latest
           format: cyclonedx-json
@@ -194,6 +196,7 @@ jobs:
           upload-artifact: false
       - name: Upload SBOM artifacts
         uses: actions/upload-artifact@v4
+        if: hashFiles('sbom-source.cdx.json', 'sbom-image.cdx.json') != ''
         with:
           name: sbom-artifacts
           path: |
@@ -252,7 +255,8 @@ jobs:
           cosign sign --yes ghcr.io/${{ steps.lc.outputs.repo }}:${{ github.ref_name }} || true
           cosign sign --yes ghcr.io/${{ steps.lc.outputs.repo }}:latest || true
       - name: Generate SBOM for pushed image (CycloneDX)
-        uses: anchore/sbom-action@v0.15.8
+        uses: anchore/sbom-action@v0
+        continue-on-error: true   # SBOM is supply-chain transparency, not gating
         with:
           image: ghcr.io/${{ steps.lc.outputs.repo }}:${{ github.ref_name }}
           format: cyclonedx-json
@@ -260,6 +264,7 @@ jobs:
           upload-artifact: false
       - name: Upload SBOM (GHCR image)
         uses: actions/upload-artifact@v4
+        if: hashFiles('sbom-image-ghcr.cdx.json') != ''
         with:
           name: sbom-image-ghcr
           path: sbom-image-ghcr.cdx.json
