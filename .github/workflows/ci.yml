@@ -211,6 +211,15 @@ jobs:
           docker logs mxd-test
           docker stop mxd-test
 
+      - name: Save Docker image for downstream jobs (integration-test)
+        run: docker save mxdlib:latest -o mxdlib-image.tar
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mxdlib-docker-image
+          path: mxdlib-image.tar
+          retention-days: 1
+
 
   docker-publish-sign:
     runs-on: ubuntu-latest
@@ -272,29 +281,58 @@ jobs:
   integration-test:
     runs-on: ubuntu-latest
     needs: docker-build
-    
+
     steps:
       - uses: actions/checkout@v4
-      - name: Start test environment
+
+      - name: Download Docker image artifact from docker-build
+        uses: actions/download-artifact@v4
+        with:
+          name: mxdlib-docker-image
+          path: .
+
+      - name: Load Docker image
         run: |
-          docker compose -f docker-compose.test.yml up -d
-          sleep 30
-    
-      - name: Run integration tests
+          docker load -i mxdlib-image.tar
+          docker image ls mxdlib:latest
+
+      - name: Start 2-node test environment + wait for healthy
         run: |
-          # Test that containers start successfully
-          docker compose -f docker-compose.test.yml ps
-          # Test that nodes are running (check logs for startup messages)
-          docker logs mxd-node-1 | grep "Node started successfully" || echo "Node 1 startup check"
-          docker logs mxd-node-2 | grep "Node started successfully" || echo "Node 2 startup check"
-          
-          # Test basic container connectivity
-          docker exec mxd-node-1 echo "Node 1 responsive"
-          docker exec mxd-node-2 echo "Node 2 responsive"
-    
+          # Use the CI-tailored compose: image reuse, no monitoring stack,
+          # tight healthchecks. --wait blocks until both services report
+          # healthy (or timeout), replacing the fragile `sleep 30`.
+          docker compose -f docker-compose.ci.yml up -d --wait --wait-timeout 90
+          docker compose -f docker-compose.ci.yml ps
+
+      - name: Verify both nodes respond to /status with valid JSON
+        run: |
+          # Use `docker exec` (not host curl) — host→container HTTP through
+          # GitHub Actions' Docker bridge has IPv6/IPv4 quirks that cause
+          # curl exit 56 (CURLE_RECV_ERROR) even when the container's
+          # internal healthcheck passes. The healthcheck already validates
+          # the endpoint inside the container; this step prints the actual
+          # response body for visibility and asserts both nodes return JSON
+          # with the expected fields.
+          set -e
+          for container in mxd-node-1 mxd-node-2; do
+              echo "--- $container /status ---"
+              body=$(docker exec "$container" curl -fs --max-time 5 http://localhost:8080/status)
+              echo "$body"
+              echo "$body" | grep -qE '"height"' || { echo "no height field"; exit 1; }
+              echo "$body" | grep -qE '"validator_count"' || { echo "no validator_count field"; exit 1; }
+          done
+
+      - name: Capture logs (always, for debugging)
+        if: always()
+        run: |
+          echo "--- mxd-node-1 logs ---"
+          docker logs mxd-node-1 2>&1 | tail -40 || true
+          echo "--- mxd-node-2 logs ---"
+          docker logs mxd-node-2 2>&1 | tail -40 || true
+
       - name: Cleanup
         if: always()
-        run: docker compose -f docker-compose.test.yml down
+        run: docker compose -f docker-compose.ci.yml down -v
 
   deploy-staging:
     runs-on: ubuntu-latest

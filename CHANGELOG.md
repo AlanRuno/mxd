@@ -14,6 +14,57 @@ versions track the C library and tooling as a whole.
 
 ---
 
+## [0.2.8] — Windows launcher + green integration-test
+
+### Added
+
+- **`letsgo-wsl.bat`** — one-click Windows launcher that auto-installs
+  WSL2 + Ubuntu-22.04 if missing (first run requires admin + reboot),
+  then clones the repo inside WSL and runs `./letsgo testnet|mainnet`.
+  On a machine that already has WSL2, total bring-up is ~30 seconds —
+  same as the native Linux path.
+- **README "Running on Windows" section** — documents the WSL2 and
+  MSYS2 paths side-by-side with a clear recommendation (WSL2 for
+  almost everyone, MSYS2 only if WSL is unavailable).
+
+### Fixed (CI)
+
+- **`integration-test` job finally green.** Three compounding bugs
+  found and fixed via the v0.2.5 → v0.2.7 release smoke arc:
+
+  1. The job rebuilt the full Dockerfile from scratch on every run
+     (~5+ min) because `docker-build`'s `mxdlib:latest` image lived on
+     a different runner. Now `docker-build` saves the image as a
+     workflow artifact and `integration-test` downloads + `docker load`s
+     it (~30 s instead of ~5 min).
+  2. The container CMD didn't pass `--http-api 8080`, so
+     `http.require_auth=1` + empty `api_token` caused the HTTP API to
+     refuse to start. The compose now overrides the CMD to enable HTTP
+     API explicitly (same as what `letsgo` does on testnet).
+  3. Host curl to `localhost:8080/status` failed with CURLE_RECV_ERROR
+     (exit 56) due to an IPv6/IPv4 bridge quirk on GitHub Actions
+     runners. The verify step now uses `docker exec` to query
+     `/status` from inside each container — same path as the
+     healthcheck, no bridge involved.
+
+- **New `docker-compose.ci.yml`** (mxdlib-private, not shipped via the
+  public manifest). Minimal 2-node compose using `image: mxdlib:latest`
+  with no `build:` directive, no monitoring stack, tight healthchecks
+  asserting `/status` returns JSON with a `"height"` field. Operator-
+  facing `docker-compose.test.yml` remains in the public repo for
+  local "spin up the full stack with monitoring" use cases.
+
+### Notes
+
+- No functional changes to libmxd, chain consensus, or wire format.
+  Same binary as v0.2.7.
+- The Windows launcher works against this release tag and any
+  future tag — `letsgo-wsl.bat` itself doesn't hard-code a version;
+  it delegates to the Linux `letsgo` script which resolves the
+  latest release dynamically.
+
+---
+
 ## [0.2.7] — Bug B fix: rocksdb NULL errptr → assertion (defense in depth)
 
 The end-to-end smoke of v0.2.5 on a fresh Ubuntu 24.04 VM crashed on

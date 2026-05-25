@@ -27,7 +27,38 @@ The project builds into two artifacts: `libmxd.so` (shared library) and `mxd_nod
 - P2P networking with DHT-based node discovery
 - Cross-platform: Linux, macOS, Windows (MSYS2)
 
-## Building
+## Quick start
+
+Easiest path for new operators — downloads a prebuilt release, verifies SHA256, runs:
+
+```bash
+git clone --depth 1 https://github.com/AlanRuno/mxd.git
+cd mxd
+./letsgo testnet                # default: download prebuilt + run
+./letsgo testnet --docker       # alternative: pull + run Docker image
+./letsgo testnet --from-source  # legacy: compile everything from source (~10-20 min)
+```
+
+The prebuilt path is fully self-contained — no `apt install` of system libraries
+required. Works on any Linux with glibc ≥ 2.35 (Ubuntu 22.04+, Debian 12+,
+Fedora 36+, Rocky 9+, Arch, Alpine 3.18+ with gcompat).
+
+### Running on Windows
+
+Two paths:
+
+- **WSL2 (recommended, easiest)** — double-click `letsgo-wsl.bat`. It will
+  install WSL2 + Ubuntu-22.04 automatically if not already present (first run
+  requires admin + reboot), then run the prebuilt Linux node inside WSL.
+  Requirements: Windows 10 21H2+ or Windows 11.
+- **MSYS2/MinGW64 (compile from source)** — run `letsgo.bat` in a system that
+  already has MSYS2 installed. Produces a Windows-native binary, but takes
+  10-20 min on first run and depends on MSYS2 DLLs at runtime.
+
+For most Windows users WSL2 is dramatically simpler. Use the MSYS2 path only
+if WSL is unavailable in your environment.
+
+## Building from source
 
 ### Prerequisites
 
