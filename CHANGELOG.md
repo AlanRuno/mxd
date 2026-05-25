@@ -14,6 +14,55 @@ versions track the C library and tooling as a whole.
 
 ---
 
+## [0.2.7] — Bug B fix: rocksdb NULL errptr → assertion (defense in depth)
+
+The end-to-end smoke of v0.2.5 on a fresh Ubuntu 24.04 VM crashed on
+the first block store with:
+
+    ./db/c.cc:532: bool SaveError(char**, const rocksdb::Status&):
+      Assertion `errptr != nullptr' failed.
+
+v0.2.6 fixed the symptom at the distribution layer (pin build to
+22.04 + bundle librocksdb 6.11). v0.2.7 fixes the underlying chain-
+code bug so `letsgo --from-source` paths on any rocksdb 7.x/8.x
+distro also work cleanly.
+
+### Fixed
+
+- **`src/mxd_blockchain_db.c`** — 7 sites converted from
+  `rocksdb_put/get(..., NULL)` to the standard
+  `char *err = NULL; rocksdb_put(..., &err); if (err) { log; free; }`
+  pattern. All are best-effort housekeeping ops around the
+  `current_height` and `latest_stored_height` keys:
+  - `store_block_unconditional` — `latest_stored_height` put
+  - `store_block_unconditional` — gap-fill probe (get)
+  - `store_block_unconditional` — gap-fill `current_height` put
+  - `reorg_to_candidate` — post-rollback `current_height` put
+  - `mxd_block_exists_at_height` — existence probe (get)
+  - `mxd_advance_height_pointer` — probe (get)
+  - `mxd_advance_height_pointer` — `current_height` put
+  Behavior on success path is unchanged. Behavior on failure path
+  goes from "silent error swallow" (rocksdb 6.x) or "process abort"
+  (rocksdb 8.x) to "log WARN + continue".
+
+### Verified
+
+- CI green on both gcc + clang (37/37 tests, sanitizers clean).
+- Coordinated deploy on 6-node testnet, 8-minute soak: NRestarts=0,
+  consensus tick normal, zero rocksdb assertion lines in journals.
+
+### Notes
+
+- Mainnet validators still run the v0.2.0 binary (no symptom there
+  — rocksdb 6.11 tolerates the NULL). Mainnet rollout of this fix
+  will happen at the next coordinated v0.3.x release with a
+  staggered/canary deploy pattern.
+- Other rocksdb-heavy files (`mxd_utxo.c`, `mxd_contracts_db.c`,
+  `mxd_transaction.c`) already used the correct `&err` pattern;
+  no changes needed.
+
+---
+
 ## [0.2.6] — Self-contained bundle (works on any modern Linux)
 
 End-to-end smoke test of `letsgo testnet` on a clean Ubuntu 24.04 VM

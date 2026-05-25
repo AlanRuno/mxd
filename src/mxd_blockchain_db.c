@@ -868,8 +868,16 @@ static int store_block_unconditional(const mxd_block_t *block) {
     if (block->height >= latest_stored_height) {
         latest_stored_height = block->height + 1;  // +1 to match current_height semantics (count, not index)
         uint32_t lsh_be = htonl(latest_stored_height);
+        char *err_lsh = NULL;
         rocksdb_put(mxd_get_rocksdb_db(), mxd_get_rocksdb_writeoptions(),
-                    "latest_stored_height", 21, (char *)&lsh_be, sizeof(lsh_be), NULL);
+                    "latest_stored_height", 21, (char *)&lsh_be, sizeof(lsh_be), &err_lsh);
+        // Best-effort housekeeping write — log + continue on failure.
+        // Bug B (NULL errptr): rocksdb 6.x tolerates NULL here, but
+        // rocksdb 8.x aborts via assertion. Always pass a real errptr.
+        if (err_lsh) {
+            MXD_LOG_WARN("db", "rocksdb_put(latest_stored_height) failed: %s", err_lsh);
+            free(err_lsh);
+        }
     }
 
     // Always scan forward: advance height through any contiguous blocks.
@@ -881,15 +889,28 @@ static int store_block_unconditional(const mxd_block_t *block) {
         size_t probe_key_len;
         create_block_height_key(current_height, probe_key, &probe_key_len);
         size_t probe_len = 0;
+        char *err_probe = NULL;
         char *probe = rocksdb_get(mxd_get_rocksdb_db(), mxd_get_rocksdb_readoptions(),
-                                  (char *)probe_key, probe_key_len, &probe_len, NULL);
+                                  (char *)probe_key, probe_key_len, &probe_len, &err_probe);
+        // Bug B (NULL errptr): always pass a real errptr; rocksdb 8.x aborts otherwise.
+        // On error, treat as "not found" so the advance loop terminates cleanly.
+        if (err_probe) {
+            MXD_LOG_WARN("db", "rocksdb_get(probe height=%u) failed: %s", current_height, err_probe);
+            free(err_probe);
+            if (probe) { free(probe); probe = NULL; }
+        }
         if (probe) {
             free(probe);
             current_height++;
             // Persist the new height
             uint32_t h_be = htonl(current_height);
+            char *err_h = NULL;
             rocksdb_put(mxd_get_rocksdb_db(), mxd_get_rocksdb_writeoptions(),
-                        "current_height", 14, (char *)&h_be, sizeof(h_be), NULL);
+                        "current_height", 14, (char *)&h_be, sizeof(h_be), &err_h);
+            if (err_h) {
+                MXD_LOG_WARN("db", "rocksdb_put(current_height=%u) failed: %s", current_height, err_h);
+                free(err_h);
+            }
         } else {
             break;
         }
@@ -1267,8 +1288,13 @@ static int reorg_to_candidate(const mxd_block_t *candidate) {
     pthread_mutex_lock(&height_mutex);
     current_height = anc_h + 1;  /* ancestor inclusive — heights 0..anc_h are valid */
     uint32_t h_be = htonl(current_height);
+    char *err_reorg = NULL;
     rocksdb_put(mxd_get_rocksdb_db(), mxd_get_rocksdb_writeoptions(),
-                "current_height", 14, (char *)&h_be, sizeof(h_be), NULL);
+                "current_height", 14, (char *)&h_be, sizeof(h_be), &err_reorg);
+    if (err_reorg) {
+        MXD_LOG_WARN("db", "rocksdb_put(current_height=%u) after reorg failed: %s", current_height, err_reorg);
+        free(err_reorg);
+    }
     pthread_mutex_unlock(&height_mutex);
 
     /* Phase 3: walk the candidate's chain forward from ancestor+1 up to and
@@ -2037,8 +2063,14 @@ int mxd_block_exists_at_height(uint32_t height) {
     size_t key_len;
     create_block_height_key(height, key, &key_len);
     size_t value_len = 0;
+    char *err = NULL;
     char *value = rocksdb_get(mxd_get_rocksdb_db(), mxd_get_rocksdb_readoptions(),
-                              (char *)key, key_len, &value_len, NULL);
+                              (char *)key, key_len, &value_len, &err);
+    if (err) {
+        MXD_LOG_WARN("db", "rocksdb_get(height=%u) for existence check failed: %s", height, err);
+        free(err);
+        if (value) { free(value); value = NULL; }
+    }
     if (value) {
         free(value);
         return 1;
@@ -2069,14 +2101,25 @@ void mxd_advance_height_pointer(void) {
         size_t probe_key_len;
         create_block_height_key(current_height, probe_key, &probe_key_len);
         size_t probe_len = 0;
+        char *err_probe = NULL;
         char *probe = rocksdb_get(mxd_get_rocksdb_db(), mxd_get_rocksdb_readoptions(),
-                                  (char *)probe_key, probe_key_len, &probe_len, NULL);
+                                  (char *)probe_key, probe_key_len, &probe_len, &err_probe);
+        if (err_probe) {
+            MXD_LOG_WARN("db", "rocksdb_get(advance probe height=%u) failed: %s", current_height, err_probe);
+            free(err_probe);
+            if (probe) { free(probe); probe = NULL; }
+        }
         if (probe) {
             free(probe);
             current_height++;
             uint32_t h_be = htonl(current_height);
+            char *err_h = NULL;
             rocksdb_put(mxd_get_rocksdb_db(), mxd_get_rocksdb_writeoptions(),
-                        "current_height", 14, (char *)&h_be, sizeof(h_be), NULL);
+                        "current_height", 14, (char *)&h_be, sizeof(h_be), &err_h);
+            if (err_h) {
+                MXD_LOG_WARN("db", "rocksdb_put(advance current_height=%u) failed: %s", current_height, err_h);
+                free(err_h);
+            }
         } else {
             break;
         }
