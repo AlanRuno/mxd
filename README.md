@@ -1,10 +1,12 @@
 # MXD - Mexican Denarius
 
-A UTXO-based blockchain with Rapid Stake Consensus (RSC), hybrid post-quantum cryptography, and zero mandatory transaction fees. Written in C.
+Post-quantum payment and settlement infrastructure built in Mexico. A UTXO-based layer-1 ledger with Rapid Stake Consensus (RSC), hybrid post-quantum cryptography, and zero mandatory transaction fees. Written in C.
 
 ## Overview
 
-MXD is a layer-1 cryptocurrency designed for efficient, secure, and accessible digital transactions. The network runs Protocol v4, which embeds on-chain validator scoring directly into block headers for transparent, deterministic proposer selection.
+MXD is a layer-1 settlement network designed for efficient, secure, and accessible digital payments. The network runs Protocol v4, which embeds on-chain validator scoring directly into block headers for transparent, deterministic proposer selection.
+
+MXD is infrastructure, not a crypto-asset offering: the network exists so that institutions, businesses, and developers can clear and settle transactions and tokenize assets and processes on a ledger that is already resistant to quantum attacks. The native unit (MXD) is the network's internal unit of account for metering and settling activity.
 
 Key design choices:
 
@@ -12,7 +14,7 @@ Key design choices:
 - **Hybrid cryptography**: Ed25519 (default) + Dilithium5 (post-quantum), selectable per node at runtime via `algo_id`
 - **Rapid Stake Consensus (RSC)**: round-robin block proposal with score-weighted fallback and validation chain signatures from 50%+ of the Rapid Table
 - **RocksDB** storage for blocks, UTXOs, and address indexes
-- **Bridge support**: native BNB-to-MXD bridge with v3 bridge mint transactions
+- **Bridge support**: one-way inbound bridge from BNB Smart Chain (BNB → MXD) with v3 bridge mint transactions
 
 The project builds into two artifacts: `libmxd.so` (shared library) and `mxd_node` (standalone node binary).
 
@@ -75,8 +77,8 @@ Additional libraries built from source by the install script: **wasm3**, **libuv
 ### Compile
 
 ```bash
-git clone https://github.com/AlanRuno/mxdlib.git
-cd mxdlib
+git clone https://github.com/AlanRuno/mxd.git
+cd mxd
 mkdir build && cd build
 cmake ..
 cmake --build . --parallel
@@ -120,7 +122,7 @@ See source (`mxd_http_api.c`) for the full endpoint list and request/response fo
 
 ## Bridge Support
 
-MXD includes a native bridge endpoint (`/bridge/submit`) for cross-chain transfers between BNB and MXD. Bridge mint transactions use the v3 transaction format and are validated against the bridge oracle before inclusion in a block.
+MXD includes a native bridge endpoint (`/bridge/submit`) for the network's **one-way, inbound** bridge: assets move from BNB Smart Chain into MXD (BNB → MXD), never the other way. Bridge mint transactions use the v3 transaction format and are validated against the bridge oracle before inclusion in a block.
 
 Detailed documentation:
 
@@ -145,4 +147,4 @@ The `docs/` directory contains detailed guides:
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). See [LICENSE](LICENSE) for details.
