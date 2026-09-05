@@ -3,9 +3,14 @@ require("dotenv").config();
 
 module.exports = {
   solidity: {
-    version: "0.8.24",
+    // 0.8.28 + cancun required by the locked @openzeppelin/contracts 5.6.1, whose
+    // Bytes.sol uses the Cancun `mcopy` opcode (BSC supports Cancun since 2024).
+    // Contracts already deployed keep their pinned 0.8.24 metadata; this only
+    // affects future compiles/deploys.
+    version: "0.8.28",
     settings: {
       optimizer: { enabled: true, runs: 200 },
+      evmVersion: "cancun",
     },
   },
   networks: {
@@ -15,9 +20,9 @@ module.exports = {
       accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
     },
     bscMainnet: {
-      // Default uses the paid Nodereal endpoint we already pay for in oracle config.
-      // Override with BSC_MAINNET_RPC_URL if rotating endpoints during the launch.
-      url: process.env.BSC_MAINNET_RPC_URL || "https://bsc-mainnet.nodereal.io/v1/46d6c304108e4b76b564ef40caba45bf",
+      // Set BSC_MAINNET_RPC_URL to your own endpoint. The public dataseed default
+      // is fine for read-only work; use a keyed provider for deploys.
+      url: process.env.BSC_MAINNET_RPC_URL || "https://bsc-dataseed.binance.org/",
       chainId: 56,
       accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
       // Reasonable defaults for a one-shot bridge deploy. BSC mainnet typically

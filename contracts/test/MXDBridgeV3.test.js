@@ -1,3 +1,7 @@
+// Explicit matcher registration: on a mapped network drive (F: → \\RunoNAS\home) module
+// resolution can yield two chai instances, leaving hardhat-chai-matchers unregistered in
+// the one mocha hands us. Requiring the plugin here pins it to this file's chai.
+require("@nomicfoundation/hardhat-chai-matchers");
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
@@ -79,16 +83,16 @@ const ONE_MXD = 1_00000000n;
 const FAR_FUTURE = 10_000_000_000;        // ~ year 2286
 const BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
 
-// Note: the local `BNBMXD.sol` source file has mint/burn for test convenience, but the
-// real deployed BNBMXD on BSC mainnet has NEITHER mint NOR burn NOR setBridge — it's a
-// fixed-supply OZ Ownable ERC-20. We use the local file's mint solely to seed test
-// balances; the bridge itself only ever uses standard `transferFrom` against the token.
+// TestBNBMXD mirrors the production token model: fixed supply minted once to the
+// deployer, no mint/burn/setBridge — same as the real deployed BNBMXD on BSC mainnet.
+// Test balances are seeded with plain transfers; the bridge itself only ever uses
+// standard `transferFrom` against the token.
 async function deployFixture() {
   const [deployer, user, alice, bob, carol, dave, eve, mallory] = await ethers.getSigners();
   const operators = [alice, bob, carol, dave, eve];
 
-  const BNBMXD = await ethers.getContractFactory("BNBMXD");
-  const token = await BNBMXD.deploy();
+  const TestBNBMXD = await ethers.getContractFactory("TestBNBMXD");
+  const token = await TestBNBMXD.deploy(1_000_000n * ONE_MXD);
   await token.waitForDeployment();
 
   const Bridge = await ethers.getContractFactory("MXDBridgeV3");
@@ -101,10 +105,9 @@ async function deployFixture() {
   );
   await bridge.waitForDeployment();
 
-  // Seed user with BNBMXD via the test-only mint path on the local source. Production
-  // BNBMXD has no mint; this fixture trick has zero counterpart in production.
-  await (await token.setBridge(deployer.address)).wait();
-  await (await token.mint(user.address, 1000n * ONE_MXD)).wait();
+  // Seed user with a plain transfer from the deployer's fixed supply — the exact
+  // mechanism available against the production token.
+  await (await token.transfer(user.address, 1000n * ONE_MXD)).wait();
 
   // User approves the bridge — required by standard ERC20 transferFrom in deposit().
   await (await token.connect(user).approve(await bridge.getAddress(), ethers.MaxUint256)).wait();
@@ -362,11 +365,9 @@ describe("MXDBridgeV3 — K-of-N admin", function () {
     const { operators, bridge, domain, alice, deployer } = await deployFixture();
 
     // Deploy a foreign ERC20 and send some to the bridge "by accident".
-    const Foreign = await ethers.getContractFactory("BNBMXD");
-    const foreign = await Foreign.deploy();
+    const Foreign = await ethers.getContractFactory("TestBNBMXD");
+    const foreign = await Foreign.deploy(100n);
     await foreign.waitForDeployment();
-    await foreign.setBridge(deployer.address);
-    await foreign.mint(deployer.address, 100n);
     await foreign.transfer(await bridge.getAddress(), 100n);
 
     const v = {
@@ -385,8 +386,8 @@ describe("MXDBridgeV3 — K-of-N admin", function () {
 describe("MXDBridgeV3 — constructor validation", function () {
   it("rejects zero token, empty operators, invalid threshold", async function () {
     const [, alice, bob] = await ethers.getSigners();
-    const BNBMXD = await ethers.getContractFactory("BNBMXD");
-    const token = await BNBMXD.deploy();
+    const TestBNBMXD = await ethers.getContractFactory("TestBNBMXD");
+    const token = await TestBNBMXD.deploy(1_000_000n * ONE_MXD);
     await token.waitForDeployment();
     const tokenAddr = await token.getAddress();
 
