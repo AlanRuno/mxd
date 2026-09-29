@@ -417,3 +417,43 @@ describe("MXDBridgeV3 — constructor validation", function () {
 function anyValue() {
   return (v) => true;
 }
+
+describe("MXDBridgeV3 — recoverToken uses SafeERC20 (private disclosure 2026-09-04, F1)", function () {
+  async function recoverSigned(bridge, domain, operators, tokenAddr, recipient, amount) {
+    const v = { tokenAddr, recipient, amount, nonce: makeNonce(), deadline: FAR_FUTURE };
+    const sigs = await sign(operators.slice(0, 3), domain, "RecoverToken", v);
+    return bridge.recoverToken(v.tokenAddr, v.recipient, v.amount, v.nonce, v.deadline, sigs);
+  }
+
+  it("reverts (SafeERC20FailedOperation) when the token's transfer returns false, balance untouched", async function () {
+    const { operators, bridge, domain, alice } = await deployFixture();
+    const Mock = await ethers.getContractFactory("MockReturnFalseERC20");
+    const mock = await Mock.deploy(1_000n);
+    await mock.waitForDeployment();
+    const bridgeAddr = await bridge.getAddress();
+    await (await mock.seed(bridgeAddr, 500n)).wait();
+    expect(await mock.balanceOf(bridgeAddr)).to.equal(500n);
+
+    await expect(recoverSigned(bridge, domain, operators, await mock.getAddress(), alice.address, 200n))
+      .to.be.revertedWithCustomError(bridge, "SafeERC20FailedOperation");
+
+    // No silent no-op: nothing moved, nothing was "recovered".
+    expect(await mock.balanceOf(bridgeAddr)).to.equal(500n);
+    expect(await mock.balanceOf(alice.address)).to.equal(0n);
+  });
+
+  it("recovers a USDT-style token whose transfer has no return value", async function () {
+    const { operators, bridge, domain, alice } = await deployFixture();
+    const Mock = await ethers.getContractFactory("MockNoReturnERC20");
+    const mock = await Mock.deploy(1_000_000n);
+    await mock.waitForDeployment();
+    const bridgeAddr = await bridge.getAddress();
+    await (await mock.transfer(bridgeAddr, 750n)).wait();
+
+    await expect(recoverSigned(bridge, domain, operators, await mock.getAddress(), alice.address, 750n))
+      .to.emit(bridge, "TokenRecovered");
+
+    expect(await mock.balanceOf(bridgeAddr)).to.equal(0n);
+    expect(await mock.balanceOf(alice.address)).to.equal(750n);
+  });
+});

@@ -68,6 +68,14 @@ There is no formal bug bounty program at this time. We will publicly credit
 reporters of valid findings (with their permission) and may offer discretionary
 rewards for high-impact reports — discussed case-by-case after the fix lands.
 
+## Acknowledgments
+
+We thank the following researchers for responsibly disclosed findings:
+
+- **ibnu76** (2026-09-04) — `MXDBridgeV3.recoverToken` used a raw `IERC20.transfer`
+  whose `false` return value was ignored; fixed with `SafeERC20.safeTransfer` plus
+  regression tests (2026-09-29).
+
 ## Hardening philosophy
 
 MXD ships with defense-in-depth on every critical path:

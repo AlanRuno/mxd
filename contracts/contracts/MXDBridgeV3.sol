@@ -300,7 +300,7 @@ contract MXDBridgeV3 is EIP712 {
         );
         _consumeAdminAction(structHash, nonce, deadline, signatures);
 
-        IERC20(tokenAddr).transfer(recipient, amount);
+        IERC20(tokenAddr).safeTransfer(recipient, amount);
         emit TokenRecovered(tokenAddr, recipient, amount, nonce);
     }
 

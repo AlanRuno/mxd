@@ -12,6 +12,19 @@ versions track the C library and tooling as a whole.
 
 ## [Unreleased]
 
+### Security
+
+- **Bridge contracts (`contracts/MXDBridgeV3.sol`):** `recoverToken` now uses
+  `SafeERC20.safeTransfer` instead of a raw `IERC20.transfer`. A token whose
+  `transfer` returns `false` now reverts with `SafeERC20FailedOperation` instead of
+  emitting `TokenRecovered` on a silent no-op, and USDT-style tokens without a
+  return value can now be recovered. Regression tests added with two test-only
+  mocks (`MockReturnFalseERC20`, `MockNoReturnERC20`). The deployed MXDBridgeV3 on
+  BSC mainnet (`0xCae102064d8E9e13d5b48F38bAc53d1155B331B4`) is immutable, so the
+  on-chain behaviour changes with the next deployment generation. Reported
+  privately on 2026-09-04 by **ibnu76** — thank you.
+
+
 ---
 
 ## [0.2.8] — Windows launcher + green integration-test

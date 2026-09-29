@@ -1,0 +1,8 @@
+node_modules/
+artifacts/
+cache/
+typechain-types/
+.env
+
+# Local operator audit logs (verify-operator.js writes here)
+scripts/verify-operator-challenges.log
