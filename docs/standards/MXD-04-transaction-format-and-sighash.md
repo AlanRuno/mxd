@@ -8,7 +8,7 @@
 | **Updated** | 2026-04-29 |
 | **Author(s)** | MXD Project |
 | **Requires** | MXD-01, MXD-03 |
-| **Supersedes** | `mxdlib/docs/serialization_spec_v4.md` (transaction-related portions only) |
+| **Supersedes** | `serialization_spec_v4` (internal predecessor document, not published; transaction-related portions only) |
 
 ## 1. Abstract
 
@@ -354,7 +354,7 @@ This defends against three classes of risk:
 - **MXD-03**: Signing & Verification.
 - **RFC 8032**: Edwards-Curve Digital Signature Algorithm (EdDSA).
 - **FIPS 180-4**: Secure Hash Standard (SHA-512).
-- **`mxdlib/docs/serialization_spec_v4.md`**: Predecessor document, partially superseded by MXD-04 (transaction sections only; non-transaction sections remain in force pending further MXD-NN specs).
+- **`serialization_spec_v4` (internal, not published)**: Predecessor document, partially superseded by MXD-04 (transaction sections only; non-transaction sections remain in force pending further MXD-NN specs).
 
 ## 15. Change log
 

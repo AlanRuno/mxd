@@ -147,7 +147,8 @@ contract MXDBridgeV3 is EIP712 {
      *                      The MXD-side oracle and C node validate the destination — an
      *                      addr32 with no matching pubkey holder is a self-inflicted loss,
      *                      not a system risk.
-     * @param amount        BNBMXD amount in 8-decimal base units (1 MXD = 10^8).
+     * @param amount        BNBMXD amount in the token's base units (the BSC token has 9 decimals;
+     *                      the oracle scales it to MXD's 8-decimal base units, 1 MXD = 10^8, before minting).
      */
     function deposit(bytes32 mxdRecipient, uint256 amount) external {
         if (paused) revert BridgePaused();

@@ -207,10 +207,10 @@ A future spec MAY introduce `"MXD-CONS-2\0"` to disambiguate further if the oper
 - **MXD-00**: Standards Index. The Domain-Tag Registry where `"MXD-CONS-1\0"` and `"MXD-VAL-V1\0"` are registered.
 - **AUDIT_2026-05-05_v6.md** findings **L6-4** (validator join/exit op_type), **L6-5** (validation-chain and genesis announce domain tag), and **concern 2** (storage-path crypto verification).
 - Reference implementation:
-  - Validation chain construction: `mxdlib/src/blockchain/mxd_rsc.c` — `mxd_compute_chain_hash` (~line 601), `mxd_add_validator_signature_to_block` (~line 670), `mxd_verify_validation_chain_integrity` (~line 806).
-  - Validation chain verification: `mxdlib/src/blockchain/mxd_blockchain_validation.c` — `mxd_verify_validation_chain` (~line 117).
-  - Validator join/exit: `mxdlib/src/blockchain/mxd_validator_management.c` — JOIN sign block (~line 122), EXIT sign block (~line 206), JOIN verify block (~line 274).
-  - Genesis announce: `mxdlib/src/blockchain/mxd_rsc.c` — `mxd_init_genesis_coordination` (~line 2354), `mxd_broadcast_genesis_announce` (~line 2391), `mxd_handle_genesis_announce` (~line 2460); also `mxdlib/src/mxd_genesis_handler.c`.
+  - Validation chain construction: `src/blockchain/mxd_rsc.c` — `mxd_compute_chain_hash` (~line 601), `mxd_add_validator_signature_to_block` (~line 670), `mxd_verify_validation_chain_integrity` (~line 806).
+  - Validation chain verification: `src/blockchain/mxd_blockchain_validation.c` — `mxd_verify_validation_chain` (~line 117).
+  - Validator join/exit: `src/blockchain/mxd_validator_management.c` — JOIN sign block (~line 122), EXIT sign block (~line 206), JOIN verify block (~line 274).
+  - Genesis announce: `src/blockchain/mxd_rsc.c` — `mxd_init_genesis_coordination` (~line 2354), `mxd_broadcast_genesis_announce` (~line 2391), `mxd_handle_genesis_announce` (~line 2460); also `src/mxd_genesis_handler.c`.
 
 ## 9. Change log
 

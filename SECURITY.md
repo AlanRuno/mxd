@@ -53,6 +53,18 @@ Out of scope:
   that IS in scope).
 - Social engineering of operators.
 
+## Deployed components (reference for reports)
+
+| Component | Deployed value | Source in this repository |
+|-----------|----------------|---------------------------|
+| MXD mainnet | `chain_id 0x4D580001`, protocol v7 (v8 activates at height 100), five validators operated by Runo Networks. Public read API and `POST /transaction` on port 8080; `/wallet/*` disabled; admin routes gated by bearer token or signature quorum. | `src/`, `include/mxd_protocol_version.h`, `docs/standards/` |
+| Bridge contract | `MXDBridgeV3` at `0xCae102064d8E9e13d5b48F38bAc53d1155B331B4` (BSC, chain id 56), launched 2026-05-18, immutable. EIP-712 domain `MXDBridge` / `3`. Admin actions need K-of-N operator signatures; the current `threshold()` and `operatorCount()` are readable on-chain. | `contracts/contracts/MXDBridgeV3.sol` (the deployed bytecode predates the `safeTransfer` fix listed in the changelog) |
+| Bridged token | Denarius MXD (BNBMXD) `0xdf1f7AdF59a178BA83f6140a4930cf3BEB7b73BF`, 9 decimals, ownership renounced; deposited tokens are burned. | Not in this repository (pre-existing ERC-20) |
+| Mint attestation | 3-of-5 Dilithium5 oracle quorum, verified by every node during block validation. | `docs/MAINNET_ORACLE_SET.md`, `docs/standards/MXD-API-01-bridge-oracle-attestation.md` |
+
+Earlier bridge contracts are retired. Findings against them are out of scope unless they
+also affect `MXDBridgeV3`.
+
 ## Severity guidelines
 
 | Severity | Examples |
