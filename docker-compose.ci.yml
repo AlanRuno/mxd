@@ -1,0 +1,75 @@
+# ============================================================================
+# docker-compose.ci.yml — minimal 2-node compose for the CI integration-test
+# job. Uses the mxdlib:latest image artifact built by the docker-build job
+# (no `build: .` here, so no recompile inside integration-test).
+#
+# Intentionally smaller than docker-compose.test.yml: no prometheus/grafana,
+# no monitoring/ volume mounts. The point here is to verify that two mxd_node
+# instances boot cleanly + their HTTP API responds. Monitoring stack is
+# tested separately.
+# ============================================================================
+
+services:
+  mxd-node-1:
+    image: mxdlib:latest
+    container_name: mxd-node-1
+    # Override the Dockerfile CMD to explicitly enable the HTTP API on
+    # port 8080. The default_config.json has http.require_auth=1 +
+    # http.api_token="" which makes the HTTP server refuse to start
+    # silently — so we pass --http-api 8080 (which letsgo does on
+    # testnet too) to force-enable it without auth for the smoke test.
+    command:
+      - mxd_node
+      - --config
+      - /opt/mxd/config/default_config.json
+      - --http-api
+      - "8080"
+    ports:
+      - "8000:8000"
+      - "8080:8080"
+    environment:
+      - MXD_NODE_ID=node1
+      - MXD_LOG_LEVEL=INFO
+    volumes:
+      - mxd-data-1:/opt/mxd/data
+    healthcheck:
+      # /status is the canonical HTTP API endpoint — see mxd_http_api.c.
+      # Also asserts the response contains "height" to defeat the case
+      # where some other server (e.g. metrics) responds with HTTP 200
+      # but the wrong content (which is what was masking the previous bug).
+      test: ["CMD-SHELL", "curl -fs http://localhost:8080/status | grep -q '\"height\"'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  mxd-node-2:
+    image: mxdlib:latest
+    container_name: mxd-node-2
+    command:
+      - mxd_node
+      - --config
+      - /opt/mxd/config/default_config.json
+      - --http-api
+      - "8080"
+    ports:
+      - "8001:8000"
+      - "8081:8080"
+    environment:
+      - MXD_NODE_ID=node2
+      - MXD_LOG_LEVEL=INFO
+    volumes:
+      - mxd-data-2:/opt/mxd/data
+    depends_on:
+      mxd-node-1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8080/status | grep -q '\"height\"'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+volumes:
+  mxd-data-1:
+  mxd-data-2:
