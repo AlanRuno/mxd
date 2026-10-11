@@ -130,7 +130,9 @@ A node verifying an incoming JOIN or EXIT request MUST:
 1. Reconstruct the 52-byte `signed_bytes` from the on-the-wire `addr32`, `timestamp`, and the message type (JOIN → `op_type=0x00`, EXIT → `op_type=0x01`).
 2. Verify the signature with MXD-03's `verify_mxd(algo_id, pubkey, msg = signed_bytes, sig = request.signature)` where `pubkey` is the public key carried in the request body.
 3. Confirm `addr32 == SHA-512(algo_id ‖ pubkey)[0..31]` per MXD-01 §4. The request asserts an identity; the public key + algo_id presented MUST hash to that identity.
-4. Apply additional admission rules (stake, rate limit, etc.) per the validator-management policy. Those rules are out of scope for this spec.
+4. Apply additional admission rules (stake, rate limit, etc.) per the validator-management policy. Those rules are out of scope for this spec, with one consensus-level exception: **from protocol v10, a JOIN is valid only if `algo_id = 0x02` (Dilithium5 / ML-DSA-87)**. A v10 block that embeds an Ed25519 JOIN entry MUST be rejected by every verifier before signature verification. The genesis block (height 0) is exempt. Existing members are not affected by v10; the rule governs admission only.
+
+From protocol v9, the committed `validator_scores` carried by each block (the canonical source of the proposer rotation and of the validation-chain signing order) drop every validator evicted on-chain, so evicted identities no longer occupy proposer or signing slots.
 
 ## 5. Genesis announce signatures
 
@@ -217,3 +219,5 @@ A future spec MAY introduce `"MXD-CONS-2\0"` to disambiguate further if the oper
 | Date | Version | Change |
 |---|---|---|
 | 2026-05-06 | 1.0.0 | Initial draft. Formalizes the v7 validation chain signed bytes, the validator join/exit signed bytes, the genesis announce signed bytes, and the storage-path crypto verification rule. Closes audit findings L6-4, L6-5, concern 2. |
+| 2026-10-09 | 1.2.1 | v9: evicted validators are dropped from the committed `validator_scores`, hence from the proposer rotation and the signing order (§4.2 note). Found during the mainnet PQ validator rotation. |
+| 2026-10-11 | 1.3.0 | v10: JOIN admission is Dilithium5-only from the activation height (§4.2 item 4). Mainnet validators are 100 % ML-DSA-87 since 2026-10-09. |

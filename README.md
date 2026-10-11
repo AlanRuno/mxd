@@ -1,17 +1,17 @@
 # MXD - Mexican Denarius
 
-Post-quantum payment and settlement infrastructure built in Mexico. A UTXO-based layer-1 ledger with Rapid Stake Consensus (RSC), hybrid post-quantum cryptography, and zero mandatory transaction fees. Written in C.
+Post-quantum payment and settlement infrastructure built in Mexico. A UTXO-based layer-1 ledger with Rapid Stake Consensus (RSC), post-quantum cryptography (every validator signs with ML-DSA-87), and zero mandatory transaction fees. Written in C.
 
 ## Overview
 
-MXD is a layer-1 settlement network designed for efficient, secure, and accessible digital payments. Mainnet has been live since 2026-05-18 and runs protocol v7; protocol v8 activates at block height 100. Validator rankings are embedded in block headers for transparent, deterministic proposer selection.
+MXD is a layer-1 settlement network designed for efficient, secure, and accessible digital payments. Mainnet has been live since 2026-05-18 and runs protocol v10 (v8 activated at height 20, v9 at 30, v10 at 52). Since 2026-10-09 all five validators operate ML-DSA-87 (Dilithium5) identities, and from protocol v10 only Dilithium5 identities can be admitted as validators. Validator rankings are embedded in block headers for transparent, deterministic proposer selection.
 
 MXD is infrastructure, not a crypto-asset offering: the network exists so that institutions, businesses, and developers can clear and settle transactions and tokenize assets and processes on a ledger that is already resistant to quantum attacks. The native unit (MXD) is the network's internal unit of account for metering and settling activity.
 
 Key design choices:
 
 - **UTXO transaction model** with voluntary tips (no mandatory fees)
-- **Hybrid cryptography**: Ed25519 (default) + Dilithium5 (post-quantum), selectable per node at runtime via `algo_id`
+- **Per-key signature algorithm**: Dilithium5 / ML-DSA-87 (default for node identities; mandatory for validators since protocol v10) or Ed25519 (wallets, legacy), bound into the address format via `algo_id`
 - **Rapid Stake Consensus (RSC)**: round-robin block proposal with score-weighted fallback and validation-chain signatures from at least ceil(2N/3) of the Rapid Table
 - **RocksDB** storage for blocks, UTXOs, and address indexes
 - **Bridge support**: one-way inbound bridge from BNB Smart Chain (BNB → MXD) with v3 bridge mint transactions
@@ -21,7 +21,7 @@ The project builds into two artifacts: `libmxd.so` (shared library) and `mxd_nod
 ## Features
 
 - Zero mandatory fees -- users may attach voluntary tips
-- Hybrid Ed25519 / Dilithium5 signatures on the same network
+- Dilithium5 validator set (100 % of mainnet since 2026-10-09, enforced by protocol v10) alongside Ed25519 or Dilithium5 wallet keys
 - On-chain validator ranking (rank score, stake, reliability and performance metrics, exposed by `GET /validators`)
 - Deterministic total supply tracking per block
 - WASM3-based smart contracts (basic support, disabled by default)
@@ -99,13 +99,13 @@ This produces `lib/libmxd.so` and `lib/mxd_node`.
 ./mxd_node --port 9000 --bootstrap
 ```
 
-Configuration is via a JSON file. Key fields: `node_id`, `network_type`, `port`, `data_dir`, `initial_stake`, `preferred_sign_algo` (1 = Ed25519, 2 = Dilithium5), `bootstrap_nodes`. See the `default_config.json` file for all options.
+Configuration is via a JSON file. Key fields: `node_id`, `network_type`, `port`, `data_dir`, `initial_stake`, `preferred_sign_algo` (1 = Ed25519, 2 = Dilithium5; default 2), `bootstrap_nodes`. See the `default_config.json` file for all options.
 
 ### Networks
 
-| Network | `chain_id` | Status (2026-09-30) |
+| Network | `chain_id` | Status (2026-10-11) |
 |---------|-----------|---------------------|
-| Mainnet | `0x4D580001` | Live since 2026-05-18. Five validators operated by Runo Networks; public read API on port **8080**, P2P on port **8000**. Explorer and wallet: https://mxd.network |
+| Mainnet | `0x4D580001` | Live since 2026-05-18. Five validators operated by Runo Networks, all ML-DSA-87 identities since 2026-10-09 (protocol v10 since block 52); public read API on port **8080**, P2P on port **8000**. Explorer and wallet: https://mxd.network |
 | Testnet | `0x4D580002` | Public fleet offline. Run your own nodes with the testnet configuration if you need one. |
 
 The node takes its chain id from the `MXD_CHAIN_ID` environment variable (`mainnet` by default, `testnet` for a testnet node).
