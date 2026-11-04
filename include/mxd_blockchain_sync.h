@@ -22,8 +22,44 @@ int mxd_request_validation_chain_from_peers(const uint8_t block_hash[64]);
 // MXD_MSG_GET_VALIDATION_CHAIN requests so peers can fill the gaps.
 // Self-heals state divergence after gossip drops, peer restarts, or
 // brief HTTP/consensus stalls. Cheap when nothing is below quorum.
+//
+// Requests for a given (height, block hash) are rate-limited with exponential
+// backoff (MXD_RECONCILE_BASE_BACKOFF_MS, doubling up to
+// MXD_RECONCILE_MAX_BACKOFF_MS). A block that never reached quorum on any node
+// — e.g. one produced while a validator in its signing order was offline —
+// has no missing signatures to fetch; without the backoff every node re-asked
+// every peer every cycle and rejected every answer, forever (mainnet 2026-10/11).
 void mxd_reconcile_validation_chains(uint32_t lookback);
 
+#define MXD_RECONCILE_BASE_BACKOFF_MS   60000ULL   // after the first unanswered request
+#define MXD_RECONCILE_MAX_BACKOFF_MS  3600000ULL   // retry cap: once an hour
+#define MXD_RECONCILE_MAX_PER_CYCLE   32           // blocks requested per reconcile pass
+
+// Selection half of mxd_reconcile_validation_chains (no network): scans the
+// `lookback` most recent stored heights from the tip down and returns, newest
+// first, those below `quorum` whose backoff has elapsed at `now_ms`, recording
+// the attempt. Returns the number written to out_heights/out_hashes (<= max).
+uint32_t mxd_reconcile_select_blocks(uint32_t lookback, uint32_t quorum, uint64_t now_ms,
+                                     uint32_t *out_heights, uint8_t (*out_hashes)[64],
+                                     uint32_t max);
+
+// Forget all reconciliation backoff state (tests, or after a reorg/rollback).
+void mxd_reconcile_reset_state(void);
+
+// 1 if the peer's chain (`sigs`, in chain_position order) is a prefix-compatible
+// extension of `local`'s validation chain — same validator and signature bytes
+// at every position both sides have — 0 if it diverges, -1 on bad input. A
+// divergent chain belongs to another view of the block (the block hash does not
+// bind the proposer, so competing proposals can share a hash) and cannot be
+// grafted onto ours: chain hashes are sequential.
+int mxd_validation_chain_extends_local(const mxd_block_t *local,
+                                       const mxd_validator_signature_t *sigs,
+                                       uint32_t count);
+
+// Merge a peer's validation chain into the local copy of the block. Returns 1
+// if at least one signature was appended and stored, 0 if there was nothing
+// new to add (shorter, equal or divergent chain), -1 on error (unknown block,
+// store failure).
 int mxd_process_incoming_validation_chain(const uint8_t block_hash[64],
                                          const mxd_validator_signature_t *signatures,
                                          uint32_t signature_count);

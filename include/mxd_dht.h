@@ -33,6 +33,8 @@ void mxd_init_bucket(mxd_bucket_t* bucket);
 int mxd_init_node(const void* config);
 int mxd_init_dht(const uint8_t* public_key);
 int mxd_start_dht(uint16_t port);
+int mxd_dht_set_keygen_algo(uint8_t algo_id);   // Algo for a freshly generated node_keys.v2 (1=Ed25519, 2=Dilithium5)
+uint8_t mxd_dht_get_keygen_algo(void);
 int mxd_stop_dht(void);
 int mxd_dht_find_nodes(const mxd_node_id_t* target, mxd_dht_node_t* nodes, size_t* count);
 int mxd_dht_enable_nat_traversal(void);

@@ -132,6 +132,7 @@ typedef struct {
     uint32_t messages_sent;
     uint32_t messages_received;
     int active;
+    time_t activated_at;  // When this record was (re)activated — silence is measured from here until the first message arrives
     uint8_t algo_id;  // Peer's signature algorithm (for diagnostics/display)
 } unified_peer_t;
 
@@ -143,6 +144,23 @@ static pthread_mutex_t unified_peer_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define MXD_KEEPALIVE_TIMEOUT 45
 #define MXD_MAX_KEEPALIVE_FAILURES 3
 #define MXD_PROTOCOL_VERSION 4
+
+// Keepalive decision for one peer record (pure; tests/test_p2p_keepalive.c).
+// Silence is measured from the last message received, or — for a peer we have
+// never heard from — from the moment the record was activated, so a peer that
+// stays mute while we keep sending to it is still detected. Any received
+// message counts as life: PINGs are only needed on links idle for interval_s.
+mxd_peer_liveness_t mxd_p2p_peer_liveness(time_t now, time_t activated_at, time_t last_sent,
+                                          time_t last_received, int interval_s, int timeout_s) {
+    time_t reference = (last_received > 0) ? last_received : activated_at;
+    if (reference > 0 && now > reference && (now - reference) > timeout_s) {
+        return MXD_PEER_LIVENESS_TIMED_OUT;
+    }
+    if (last_sent <= 0 || now < last_sent || (now - last_sent) >= interval_s) {
+        return MXD_PEER_LIVENESS_PING;
+    }
+    return MXD_PEER_LIVENESS_OK;
+}
 
 static pthread_t keepalive_thread;
 static volatile int keepalive_running = 0;
@@ -467,6 +485,9 @@ static void update_unified_peer_sent(const char *address, uint16_t port) {
         if (strcmp(unified_peers[i].address, address) == 0 && unified_peers[i].port == port) {
             unified_peers[i].last_message_sent = time(NULL);
             unified_peers[i].messages_sent++;
+            if (!unified_peers[i].active) {
+                unified_peers[i].activated_at = time(NULL);
+            }
             unified_peers[i].active = 1;
             found = 1;
             break;
@@ -488,6 +509,7 @@ static void update_unified_peer_sent(const char *address, uint16_t port) {
             unified_peers[slot].messages_sent = 1;
             unified_peers[slot].messages_received = 0;
             unified_peers[slot].active = 1;
+            unified_peers[slot].activated_at = time(NULL);
             unified_peers[slot].algo_id = 0;
             
             if (inactive_slot < 0) {
@@ -509,6 +531,9 @@ static void update_unified_peer_received(const char *address, uint16_t port) {
         if (strcmp(unified_peers[i].address, address) == 0 && unified_peers[i].port == port) {
             unified_peers[i].last_message_received = time(NULL);
             unified_peers[i].messages_received++;
+            if (!unified_peers[i].active) {
+                unified_peers[i].activated_at = time(NULL);
+            }
             unified_peers[i].active = 1;
             found = 1;
             break;
@@ -530,6 +555,7 @@ static void update_unified_peer_received(const char *address, uint16_t port) {
             unified_peers[slot].messages_sent = 0;
             unified_peers[slot].messages_received = 1;
             unified_peers[slot].active = 1;
+            unified_peers[slot].activated_at = time(NULL);
             unified_peers[slot].algo_id = 0;
             
             if (inactive_slot < 0) {
@@ -626,6 +652,18 @@ static peer_connection_t* find_connection_for_peer(const char *address, uint16_t
     }
     pthread_mutex_unlock(&peer_mutex);
     return NULL;
+}
+
+// Canonical port for the unified peer table: the peer's LISTEN port whenever a
+// connection to it exists (an inbound connection carries an ephemeral remote
+// port that must not be used as an identity — it created a second, starving
+// record for every inbound peer and PING targets no one listens on).
+static uint16_t unified_port_for(const char *address, uint16_t port) {
+    peer_connection_t *conn = find_connection_for_peer(address, port);
+    if (conn && conn->peer_listen_port != 0) {
+        return conn->peer_listen_port;
+    }
+    return port;
 }
 
 static int validate_message(const mxd_message_header_t *header, const void *payload, peer_connection_t *conn) {
@@ -1033,7 +1071,10 @@ static void handle_peers_message(const char *address, uint16_t port, const void 
         for (size_t j = 0; j < MXD_MAX_PEERS; j++) {
             if (active_connections[j].active &&
                 strcmp(active_connections[j].address, peer_addr) == 0 &&
-                active_connections[j].port == peer_port) {
+                (active_connections[j].port == peer_port ||
+                 active_connections[j].peer_listen_port == peer_port)) {
+                // An inbound connection from this peer counts: its remote port is
+                // ephemeral, its listen port is what the PEERS message advertises.
                 already_connected = 1;
                 break;
             }
@@ -1609,7 +1650,24 @@ static int handle_incoming_message(const char *address, uint16_t port,
 
     consecutive_errors = 0;
     
-    update_unified_peer_received(address, port);
+    // Any validated message proves the connection is alive. Before this only
+    // PING/PONG refreshed last_keepalive_received, while PINGs are sent only to
+    // links idle for MXD_KEEPALIVE_INTERVAL — a busy link (height polls every
+    // 5 s) therefore never saw a PING and the reaper tore it down every
+    // MXD_KEEPALIVE_TIMEOUT, on both ends, forever (mainnet 2026-11).
+    if (conn) {
+        pthread_mutex_lock(&peer_mutex);
+        if (conn->active) {
+            conn->last_keepalive_received = time(NULL);
+            conn->keepalive_failures = 0;
+        }
+        pthread_mutex_unlock(&peer_mutex);
+    }
+
+    // Attribute the message to the peer's listen port (its identity), not to
+    // the ephemeral remote port of an inbound socket.
+    update_unified_peer_received(address,
+                                 (conn && conn->peer_listen_port != 0) ? conn->peer_listen_port : port);
 
     switch (header->type) {
         case MXD_MSG_HANDSHAKE:
@@ -1652,7 +1710,7 @@ static int handle_incoming_message(const char *address, uint16_t port,
         }
         default:
             if (message_handler) {
-                MXD_LOG_INFO("p2p", "Dispatching to handler: type=%d len=%u from %s:%u", 
+                MXD_LOG_DEBUG("p2p", "Dispatching to handler: type=%d len=%u from %s:%u", 
                              header->type, header->length, address, port);
                 message_handler(address, port, header->type, payload, header->length);
             } else {
@@ -1704,12 +1762,24 @@ static int try_establish_persistent_connection(const char *address, uint16_t por
 
     enable_tcp_keepalive(sock);
 
-    struct timeval timeout;
-    timeout.tv_sec = 5;
-    timeout.tv_usec = 0;
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-    
+    // LIVENESS FIX (gossip-A): this option persists for the life of the
+    // persistent connection, including its message read loop. The RECEIVE
+    // timeout MUST exceed the keepalive ping interval (MXD_KEEPALIVE_INTERVAL
+    // = 15s) and the dead-peer window (MXD_KEEPALIVE_TIMEOUT = 45s) so a
+    // quiet-but-alive peer is not torn down between pings. The old 5s value
+    // caused idle-alive connections to self-destruct every 5s, producing
+    // constant reconnect churn ("Duplicate connection ... rejected") and
+    // breaking mempool/transaction gossip. Dead peers are still reaped by the
+    // keepalive thread at 45s. The send timeout stays short (connect/handshake).
+    struct timeval rcv_timeout;
+    rcv_timeout.tv_sec = 60;
+    rcv_timeout.tv_usec = 0;
+    struct timeval snd_timeout;
+    snd_timeout.tv_sec = 5;
+    snd_timeout.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &rcv_timeout, sizeof(rcv_timeout));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &snd_timeout, sizeof(snd_timeout));
+
     if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         close(sock);
         return -1;
@@ -1952,22 +2022,26 @@ static void* keepalive_thread_func(void* arg) {
             peer_actions[action_count].address[sizeof(peer_actions[action_count].address) - 1] = '\0';
             peer_actions[action_count].port = unified_peers[i].port;
             
-            if (unified_peers[i].last_message_received > 0) {
-                time_t time_since_last_received = now - unified_peers[i].last_message_received;
-                
-                if (time_since_last_received > MXD_KEEPALIVE_TIMEOUT) {
-                    peer_actions[action_count].timed_out = 1;
-                    peer_actions[action_count].time_since_last_received = time_since_last_received;
-                    unified_peers[i].active = 0;
-                    action_count++;
-                    continue;
-                }
+            mxd_peer_liveness_t verdict = mxd_p2p_peer_liveness(now, unified_peers[i].activated_at,
+                                                                unified_peers[i].last_message_sent,
+                                                                unified_peers[i].last_message_received,
+                                                                MXD_KEEPALIVE_INTERVAL, MXD_KEEPALIVE_TIMEOUT);
+            if (verdict == MXD_PEER_LIVENESS_TIMED_OUT) {
+                time_t reference = (unified_peers[i].last_message_received > 0)
+                                       ? unified_peers[i].last_message_received
+                                       : unified_peers[i].activated_at;
+                peer_actions[action_count].timed_out = 1;
+                peer_actions[action_count].time_since_last_received = now - reference;
+                // Start a fresh silence window if a later send reactivates the
+                // record; otherwise the same stale timestamp re-fires every pass.
+                unified_peers[i].active = 0;
+                unified_peers[i].last_message_received = 0;
+                unified_peers[i].last_message_sent = 0;
+                unified_peers[i].activated_at = 0;
+                action_count++;
+                continue;
             }
-            
-            time_t time_since_last_sent = (unified_peers[i].last_message_sent > 0) ? 
-                                          (now - unified_peers[i].last_message_sent) : MXD_KEEPALIVE_INTERVAL;
-            
-            if (time_since_last_sent >= MXD_KEEPALIVE_INTERVAL) {
+            if (verdict == MXD_PEER_LIVENESS_PING) {
                 peer_actions[action_count].needs_ping = 1;
                 action_count++;
             }
@@ -2001,8 +2075,9 @@ static void* keepalive_thread_func(void* arg) {
             time_t time_since_last_received = now - active_connections[i].last_keepalive_received;
             
             if (time_since_last_received > MXD_KEEPALIVE_TIMEOUT) {
-                MXD_LOG_WARN("p2p", "Incoming connection %s:%d timed out, shutting down socket",
-                           active_connections[i].address, active_connections[i].port);
+                MXD_LOG_WARN("p2p", "Connection %s:%d silent for %lds (no message or keepalive), shutting down socket",
+                           active_connections[i].address, active_connections[i].port,
+                           (long)time_since_last_received);
                 // Use shutdown() instead of close() to unblock the connection handler's read_n().
                 // The connection handler thread owns close() — double-close causes fd reuse bugs
                 // that corrupt RocksDB WAL/SST file descriptors.
@@ -2152,7 +2227,7 @@ static void* connection_handler(void* arg) {
             break;
         }
         
-        MXD_LOG_INFO("p2p", "Parsed header from %s:%d: type=%d, length=%u",
+        MXD_LOG_DEBUG("p2p", "Parsed header from %s:%d: type=%d, length=%u",
                     conn->address, conn->port, header.type, header.length);
 
         // Explicit size guard before malloc (C8): defense-in-depth against unchecked network length
@@ -2174,7 +2249,7 @@ static void* connection_handler(void* arg) {
             break;
         }
         
-        MXD_LOG_INFO("p2p", "Successfully read payload from %s:%d: type=%d, length=%u", 
+        MXD_LOG_DEBUG("p2p", "Successfully read payload from %s:%d: type=%d, length=%u", 
                     conn->address, conn->port, header.type, header.length);
         
         if (header.type == MXD_MSG_GET_PEERS) {
@@ -2231,17 +2306,40 @@ static void* server_thread_func(void* arg) {
             continue;
         }
 
+        // LIVENESS FIX (gossip-dup): an inbound connection from a peer IP that
+        // already has an active slot. Previously this was ALWAYS rejected
+        // (match-by-IP). When the existing connection is actually dead but the
+        // keepalive reaper (MXD_KEEPALIVE_TIMEOUT) has not collected it yet, that
+        // forced the peer to keep retrying — the residual "Duplicate connection
+        // rejected" churn. Now: if the existing connection is STALE (no keepalive
+        // within the timeout) reap it here and accept the reconnect; a still-live
+        // connection is a genuine duplicate and is rejected. Safe under peer_mutex:
+        // the connection_handler's own teardown also takes peer_mutex and guards on
+        // socket>=0 / active, so setting socket=-1 + active=0 here avoids any
+        // double-close or double-decrement.
         int duplicate_found = 0;
         for (size_t i = 0; i < MXD_MAX_PEERS; i++) {
             if (active_connections[i].active &&
                 strcmp(active_connections[i].address, client_ip) == 0) {
-                duplicate_found = 1;  // Match by address only — one connection per peer
+                time_t idle = time(NULL) - active_connections[i].last_keepalive_received;
+                if (idle > MXD_KEEPALIVE_TIMEOUT) {
+                    MXD_LOG_INFO("p2p", "Reaping stale connection from %s (idle %lds), accepting reconnect",
+                                 client_ip, (long)idle);
+                    if (active_connections[i].socket >= 0) {
+                        close(active_connections[i].socket);
+                        active_connections[i].socket = -1;  // handler will skip its close
+                    }
+                    active_connections[i].active = 0;        // handler will skip its count decrement
+                    active_connection_count--;
+                } else {
+                    duplicate_found = 1;  // existing connection is live — genuine duplicate
+                }
                 break;
             }
         }
-        
+
         if (duplicate_found) {
-            MXD_LOG_INFO("p2p", "Duplicate connection from %s:%d rejected", client_ip, client_port);
+            MXD_LOG_INFO("p2p", "Duplicate connection from %s:%d rejected (existing connection still live)", client_ip, client_port);
             close(client_socket);
             pthread_mutex_unlock(&peer_mutex);
             continue;
@@ -2264,8 +2362,14 @@ static void* server_thread_func(void* arg) {
         
         enable_tcp_keepalive(client_socket);
 
+        // LIVENESS FIX (gossip-A): receive timeout must exceed the keepalive
+        // ping interval (15s) + dead-peer window (45s) so an idle-but-alive
+        // inbound peer is not torn down between pings. The old 10s value made
+        // idle connections self-destruct, driving the "Duplicate connection
+        // rejected" churn and breaking transaction gossip. Dead peers are still
+        // reaped by the keepalive thread at MXD_KEEPALIVE_TIMEOUT.
         struct timeval timeout;
-        timeout.tv_sec = 10;
+        timeout.tv_sec = 60;
         timeout.tv_usec = 0;
         setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
@@ -2649,7 +2753,7 @@ int mxd_get_peers(mxd_peer_t* peers, size_t* peer_count) {
                 (*peer_count)++;
             }
         }
-        MXD_LOG_INFO("p2p", "Retrieved %zu peers from DHT", *peer_count);
+        MXD_LOG_DEBUG("p2p", "Retrieved %zu peers from DHT", *peer_count);
     }
     
     return 0;
@@ -2700,7 +2804,7 @@ static int mxd_send_message_nonblocking(const char* address, uint16_t port,
         return -1;
     }
 
-    update_unified_peer_sent(address, port);
+    update_unified_peer_sent(address, unified_port_for(address, port));
 
     return 0;
 }
@@ -2792,7 +2896,7 @@ int mxd_send_message(const char* address, uint16_t port,
         return -1;
     }
 
-    update_unified_peer_sent(address, port);
+    update_unified_peer_sent(address, unified_port_for(address, port));
 
     return 0;
 }

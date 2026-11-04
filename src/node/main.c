@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <ctype.h>
 #include "../include/mxd_config.h"
 #include "../include/mxd_metrics.h"
 #include "../include/mxd_dht.h"
@@ -59,11 +60,23 @@ static void handle_p2p_transaction(const void *payload, size_t payload_length) {
         return;
     }
 
-    // Add to local mempool (will silently fail if already present)
+    // Add to local mempool (returns non-zero if already present).
     if (mxd_add_to_mempool(&tx, MXD_PRIORITY_MEDIUM) == 0) {
         char hash_hex[17] = {0};
         for (int i = 0; i < 8; i++) snprintf(hash_hex + i*2, 3, "%02x", tx.tx_hash[i]);
         MXD_LOG_DEBUG("node", "Added P2P transaction %s... to mempool", hash_hex);
+
+        // LIVENESS FIX (gossip-B): re-flood newly-accepted transactions to our
+        // peers. Previously gossip was single-hop — the submit endpoint
+        // broadcast once to its direct peers and receivers never re-broadcast,
+        // so a tx only reached the submitter's immediate neighbours. On the
+        // dormant-chain design (a proposer only builds a block when its OWN
+        // mempool is non-empty), a tx that never reaches the current proposer
+        // leaves the chain stalled. Re-broadcasting the raw payload here makes
+        // gossip a proper flood. Gated on the "newly added" (==0) return so
+        // duplicates are NOT re-sent — the flood terminates once every peer has
+        // seen the tx (no broadcast storm).
+        mxd_broadcast_message(MXD_MSG_TRANSACTIONS, payload, payload_length);
     }
 
     mxd_free_transaction(&tx);
@@ -291,6 +304,16 @@ static void *auto_join_thread_func(void *arg) {
             continue;
         }
 
+        /* v10: only Dilithium5 identities may JOIN once v10 is active for the next block. */
+        if (!mxd_join_algo_allowed_at(node_algo_id, blockchain_height, mxd_get_network_type())) {
+            MXD_LOG_ERROR("auto-join",
+                          "JOIN refused: this node's identity is %s but protocol v10 (active at height %u) admits only "
+                          "Dilithium5 validators. Generate a new identity with 'mxd_keygen --algo dilithium5', fund it and restart.",
+                          mxd_sig_alg_name(node_algo_id), blockchain_height);
+            last_submit_ms = now_ms;  /* re-check after the cooldown instead of spamming the log */
+            continue;
+        }
+
         /* Eligible — submit. */
         size_t pk_len = mxd_sig_pubkey_len(node_algo_id);
         MXD_LOG_INFO("auto-join",
@@ -502,6 +525,26 @@ int main(int argc, char** argv) {
         .enable_console = 1,
         .enable_json = 0
     };
+    // MXD_LOG_LEVEL=error|warn|info|debug (default info) — operators running
+    // under systemd can turn the per-message chatter down without a rebuild.
+    {
+        const char *lv = getenv("MXD_LOG_LEVEL");
+        if (lv && *lv) {
+            char norm[16] = {0};
+            for (size_t i = 0; i < sizeof(norm) - 1 && lv[i]; i++) {
+                norm[i] = (char)tolower((unsigned char)lv[i]);
+            }
+            if (strcmp(norm, "error") == 0) {
+                log_config.level = MXD_LOG_ERROR;
+            } else if (strcmp(norm, "warn") == 0 || strcmp(norm, "warning") == 0) {
+                log_config.level = MXD_LOG_WARN;
+            } else if (strcmp(norm, "debug") == 0) {
+                log_config.level = MXD_LOG_DEBUG;
+            } else {
+                log_config.level = MXD_LOG_INFO;
+            }
+        }
+    }
     mxd_init_logging(&log_config);
     
     MXD_LOG_INFO("node", "MXD Node starting...");
@@ -720,6 +763,20 @@ int main(int argc, char** argv) {
     mxd_set_message_handler(mxd_message_multiplexer);
     MXD_LOG_INFO("node", "Message multiplexer registered (genesis + validation handlers)");
     
+    // Algorithm for a freshly generated node identity (only used when
+    // data/node_keys.v2 is absent). CLI --algo wins, then config
+    // preferred_sign_algo, else Dilithium5. A persisted keyfile always wins.
+    {
+        uint8_t keygen_algo = algo_specified ? override_algo_id :
+                              (current_config.preferred_sign_algo ? current_config.preferred_sign_algo
+                                                                  : MXD_SIGALG_DILITHIUM5);
+        if (mxd_dht_set_keygen_algo(keygen_algo) != 0) {
+            MXD_LOG_ERROR("node", "Invalid key generation algorithm %u", keygen_algo);
+            return 1;
+        }
+        MXD_LOG_INFO("node", "Key generation algorithm (if no keyfile): %s", mxd_sig_alg_name(keygen_algo));
+    }
+
     // Start DHT service
     if (mxd_start_dht(current_config.port) != 0) {
         MXD_LOG_ERROR("node", "Failed to start DHT service");
@@ -799,12 +856,12 @@ int main(int argc, char** argv) {
     }
     
     uint8_t requested_algo_id = algo_specified ? override_algo_id : 
-                                 (current_config.preferred_sign_algo ? current_config.preferred_sign_algo : MXD_SIGALG_ED25519);
+                                 (current_config.preferred_sign_algo ? current_config.preferred_sign_algo : MXD_SIGALG_DILITHIUM5);
     
     if (requested_algo_id != node_algo_id) {
         MXD_LOG_WARN("node", "CLI/config requested %s but persisted node keys are %s", 
                      mxd_sig_alg_name(requested_algo_id), mxd_sig_alg_name(node_algo_id));
-        MXD_LOG_WARN("node", "Using persisted algo_id %s. To change, delete data/node_keypair.bin and restart", 
+        MXD_LOG_WARN("node", "Using persisted algo_id %s. To change, replace data/node_keys.v2 and restart (new identity)", 
                      mxd_sig_alg_name(node_algo_id));
     }
     
@@ -1019,8 +1076,27 @@ int main(int argc, char** argv) {
             }
         }
 
+        // The full-screen dashboard is meant for an interactive terminal. Under
+        // systemd it was logged once a second — 73 % of a mainnet validator's
+        // journal (~200k lines/hour). Off a TTY, log one status line a minute
+        // instead; MXD_DASHBOARD=1 forces the dashboard (e.g. piping to a pager).
+        static int dashboard_mode = -1;
+        static uint64_t last_status_ms = 0;
+        if (dashboard_mode < 0) {
+            const char *force = getenv("MXD_DASHBOARD");
+            dashboard_mode = (isatty(STDOUT_FILENO) || (force && strcmp(force, "1") == 0)) ? 1 : 0;
+        }
+        if (!dashboard_mode) {
+            uint64_t now_ms = mxd_now_ms();
+            if (now_ms - last_status_ms < 60000ULL) {
+                sleep(1);
+                continue;
+            }
+            last_status_ms = now_ms;
+        }
+
         pthread_mutex_lock(&metrics_mutex);
-        
+
         snapshot_count = rapid_table.count < 100 ? rapid_table.count : 100;
         for (size_t i = 0; i < snapshot_count; i++) {
             if (rapid_table.nodes[i]) {
@@ -1049,8 +1125,24 @@ int main(int argc, char** argv) {
             .last_update = 0
         };
         
-        display_node_metrics(&local_metrics, &local_stake, &current_config, &snapshot_table,
-                           blockchain_height, has_block ? latest_block_hash : NULL);
+        if (dashboard_mode) {
+            display_node_metrics(&local_metrics, &local_stake, &current_config, &snapshot_table,
+                               blockchain_height, has_block ? latest_block_hash : NULL);
+        } else {
+            char tip_hex[17] = {0};
+            mxd_block_t tip_block;
+            memset(&tip_block, 0, sizeof(tip_block));
+            if (blockchain_height > 0 && mxd_retrieve_block_by_height(blockchain_height - 1, &tip_block) == 0) {
+                for (int i = 0; i < 8; i++) {
+                    snprintf(tip_hex + i * 2, 3, "%02x", tip_block.block_hash[i]);
+                }
+                mxd_free_block(&tip_block);
+            }
+            MXD_LOG_INFO("node", "status: height=%u tip=%s validators=%zu peers=%u avg_response_ms=%llu",
+                         blockchain_height, tip_hex[0] ? tip_hex : "-", snapshot_count,
+                         (unsigned)local_metrics.peer_count,
+                         (unsigned long long)local_metrics.avg_response_time);
+        }
         sleep(1);
     }
     

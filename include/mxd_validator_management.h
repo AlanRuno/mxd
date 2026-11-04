@@ -2,6 +2,7 @@
 #define MXD_VALIDATOR_MANAGEMENT_H
 
 #include "mxd_blockchain.h"
+#include "mxd_protocol_version.h"
 #include "mxd_rsc.h"
 #include <stdint.h>
 #include <stddef.h>
@@ -87,6 +88,9 @@ int mxd_submit_validator_exit_request(const uint8_t *node_address,
                                       uint8_t algo_id);
 int mxd_get_pending_join_requests(mxd_validator_join_request_t **requests,
                                    size_t *count);
+// v10: 1 if a validator with this algo_id may JOIN at this height on this network, else 0.
+int mxd_join_algo_allowed_at(uint8_t algo_id, uint32_t height, mxd_network_type_t network);
+
 int mxd_validate_join_request(const mxd_validator_join_request_t *request,
                               mxd_amount_t total_supply);
 int mxd_clear_processed_requests(const mxd_block_t *block);

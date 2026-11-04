@@ -94,7 +94,7 @@ typedef struct {
     char node_data[1024];      // Custom node data
     int enable_upnp;           // Enable UPnP port mapping (1=enabled, 0=disabled)
     int bootstrap_refresh_interval;  // Seconds between bootstrap list refreshes (from network_info.update_interval)
-    uint8_t preferred_sign_algo;     // Preferred signature algorithm (1=Ed25519, 2=Dilithium5)
+    uint8_t preferred_sign_algo;     // Algo for a freshly generated node identity (1=Ed25519, 2=Dilithium5; default 2)
     
     // Security configurations
     mxd_http_config_t http;

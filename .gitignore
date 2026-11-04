@@ -48,3 +48,8 @@ TESTING_GUIDE.md
 /testnet
 /tests
 .worktrees/
+
+# session scratch (2026-08)
+scripts/.patch-*
+scripts/.find-*
+tools/__pycache__/

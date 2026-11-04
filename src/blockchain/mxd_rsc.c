@@ -570,32 +570,84 @@ int mxd_get_my_signing_position(const mxd_rapid_table_t *table,
                                 const uint8_t proposer_id[32],
                                 const uint8_t my_address[32],
                                 uint64_t block_height) {
-    if (!table || !proposer_id || !my_address) return -1;
+    if (!proposer_id || !my_address) return -1;
 
     // Position 0 is the proposer (v6: addr32)
     if (memcmp(my_address, proposer_id, 32) == 0) return 0;
 
-    // Collect non-proposer indices in RST table order
-    uint32_t indices[64];
+    // CONSENSUS FIX (signing-position divergence under traffic): order the
+    // non-proposer signers by the SAME committed-snapshot ordering used for
+    // proposer selection — block(height-1)'s committed validator_scores via
+    // mxd_compute_proposer_order — NOT the live mutable rapid table order.
+    //
+    // The live rapid table (table->nodes[]) re-sorts as validator balances/
+    // stake change. Under transaction traffic that array order drifts
+    // INDEPENDENTLY across nodes, so a signer and a verifier compute different
+    // positions for the same validator. Because the signed message binds a
+    // position-dependent chain_hash (mxd_compute_chain_hash), the signatures
+    // then fail to verify cross-node, quorum never forms, and the chain forks
+    // (observed: testnet split into 5 tips after ~h=130 once traffic flowed).
+    // Deriving position from the committed snapshot makes every node agree,
+    // exactly as the proposer-divergence fix did for proposer selection.
+    //
+    // Signer (mxd_blockchain_sync.c) and verifier (this file) both call this
+    // function, so unifying the ordering source here unifies both paths.
+    uint8_t order[MXD_MAX_PROPOSER_ORDER * 32];
+    uint32_t order_count = 0;
+    const uint8_t *non_proposers[MXD_MAX_PROPOSER_ORDER];
     uint32_t count = 0;
-    for (size_t i = 0; i < table->count && count < 64; i++) {
-        if (!table->nodes[i]) continue;
-        if (memcmp(table->nodes[i]->node_address, proposer_id, 32) == 0) continue;
-        indices[count] = (uint32_t)i;
-        count++;
+
+    if (block_height > 0 &&
+        mxd_compute_proposer_order((uint32_t)block_height, order,
+                                   MXD_MAX_PROPOSER_ORDER, &order_count) == 0 &&
+        order_count > 0) {
+        // Canonical path: committed-snapshot order, proposer excluded.
+        for (uint32_t i = 0; i < order_count && count < MXD_MAX_PROPOSER_ORDER; i++) {
+            const uint8_t *a = order + (size_t)i * 32;
+            if (memcmp(a, proposer_id, 32) == 0) continue;
+            non_proposers[count++] = a;
+        }
+    } else if (block_height == 0 && table) {
+        // GENESIS ONLY: there is no committed predecessor at height 0, so the
+        // live membership/table order is the legitimate canonical source for
+        // genesis signing. This is the one case where the live table is correct.
+        for (size_t i = 0; i < table->count && count < MXD_MAX_PROPOSER_ORDER; i++) {
+            if (!table->nodes[i]) continue;
+            if (memcmp(table->nodes[i]->node_address, proposer_id, 32) == 0) continue;
+            non_proposers[count++] = table->nodes[i]->node_address;
+        }
+    } else {
+        // HARDENING (fail-loud, not fail-divergent): post-genesis with the
+        // committed snapshot unavailable — block H-1 unretrievable, or the
+        // validator count exceeds MXD_MAX_PROPOSER_ORDER (256) so
+        // mxd_compute_proposer_order returns failure — REFUSE to assign a
+        // position (return -1) rather than falling back to the live rapid table.
+        //
+        // The old live-table fallback re-introduced the exact divergence this
+        // function was rewritten to remove: it fires per-node and ASYMMETRICALLY
+        // (one node reads committed order; another, mid-reorg or past the
+        // 256-cap, uses live order), so signer and verifier compute different
+        // positions, the position-dependent chain_hash diverges, and the chain
+        // forks. Post-genesis, mxd_compute_proposer_order succeeds on any
+        // caught-up node (block H-1 is the parent and carries committed scores),
+        // so refusing costs at most one signing round in a pathological window
+        // and self-corrects — a far safer failure mode than a silent fork.
+        return -1;
     }
 
     if (count == 0) return -1;
 
-    // Rotate by block_height so position 1 varies per block
+    // Rotate by block_height so position 1 varies per block (unchanged: the
+    // rotation is identical signer-side and verifier-side; only the ordering
+    // SOURCE changed from live table to committed snapshot).
     uint32_t offset = (uint32_t)(block_height % count);
     for (uint32_t pos = 0; pos < count; pos++) {
-        uint32_t idx = indices[(pos + offset) % count];
-        if (memcmp(table->nodes[idx]->node_address, my_address, 32) == 0)
+        const uint8_t *a = non_proposers[(pos + offset) % count];
+        if (memcmp(a, my_address, 32) == 0)
             return (int)(pos + 1);
     }
 
-    return -1;  // Not in table
+    return -1;  // Not in the canonical signing set
 }
 
 void mxd_compute_chain_hash(const mxd_block_t *block,
@@ -1802,6 +1854,107 @@ static int compare_score_entry_by_address(const void *a, const void *b) {
 // out_scores: receives allocated array of score entries for the new block
 // out_count: receives number of entries
 // Returns 0 on success, -1 on error.
+
+/* v9 (committed-order hygiene). The committed validator_scores carried by every
+ * block are the canonical source of the proposer rotation AND of the
+ * validation-chain signing order (mxd_compute_proposer_order). Before v9 the
+ * array was only ever extended (JOIN membership entries) and never shrunk, so a
+ * validator evicted under v8 kept a slot forever: the rotation landed on dead
+ * proposers and the strictly sequential signing chain stalled at the dead slot
+ * (mainnet 2026-10-09, after two PQ identity rotations: blocks stored with 3/5
+ * signatures, below the 2/3 quorum). From v9 the score array built for block H
+ * (base inherited from H-1 plus H-1's JOINs) drops every validator evicted
+ * on-chain:
+ *   - steady state (H-1 already v9): evictions committed in H-1;
+ *   - transition (H-1 < v9): one-time replay of every membership/eviction entry
+ *     from v8 activation up to H-1, purging ghosts accumulated under v8.
+ * Within a block, JOIN deltas are applied before eviction deltas — exactly like
+ * the live rapid-table path — so a same-block eviction wins over a JOIN, and a
+ * later JOIN re-admits. The filter runs AFTER the base+JOIN merge so the scores
+ * agree with the live table. Proposer (compute) and verifiers (verify) both run
+ * it: the committed arrays stay identical on every node; pure function of the
+ * chain. */
+static int v9_filter_evicted(const mxd_block_t *prev_block,
+                             const mxd_validator_score_entry_t *entries,
+                             uint32_t count,
+                             mxd_validator_score_entry_t **out_entries,
+                             uint32_t *out_count) {
+    *out_entries = NULL;
+    *out_count = 0;
+    if (!prev_block || !entries || count == 0) return 0;
+
+    uint8_t (*removed)[32] = calloc(MXD_MAX_PROPOSER_ORDER, 32);
+    if (!removed) return -1;
+    uint32_t removed_count = 0;
+
+    mxd_activation_heights_t ah = mxd_get_activation_heights(mxd_get_network_type());
+    uint32_t from = (prev_block->version < MXD_PROTOCOL_VERSION_9) ? ah.v8_activation_height
+                                                                   : prev_block->height;
+    if (from > prev_block->height) from = prev_block->height;
+
+    for (uint32_t h = from; ; h++) {
+        mxd_block_t tmp;
+        const mxd_block_t *b;
+        int owned = 0;
+        if (h == prev_block->height) {
+            b = prev_block;
+        } else {
+            memset(&tmp, 0, sizeof(tmp));
+            if (mxd_retrieve_block_by_height(h, &tmp) != 0) {
+                if (h >= prev_block->height) break;
+                continue;  /* unretrievable: nothing to replay from it */
+            }
+            b = &tmp;
+            owned = 1;
+        }
+        /* JOIN first (re-admits) ... */
+        if (b->rapid_membership_entries && b->rapid_membership_count > 0) {
+            for (uint32_t i = 0; i < b->rapid_membership_count; i++) {
+                const uint8_t *a = b->rapid_membership_entries[i].node_address;
+                for (uint32_t k = 0; k < removed_count; k++) {
+                    if (memcmp(removed[k], a, 32) == 0) {
+                        memmove(removed[k], removed[k + 1], (size_t)(removed_count - k - 1) * 32);
+                        removed_count--;
+                        break;
+                    }
+                }
+            }
+        }
+        /* ... then EVICT (wins) — same order as the live path. */
+        if (b->version >= MXD_PROTOCOL_VERSION_8 && b->rapid_eviction_entries && b->rapid_eviction_count > 0) {
+            for (uint32_t i = 0; i < b->rapid_eviction_count && removed_count < MXD_MAX_PROPOSER_ORDER; i++) {
+                const uint8_t *t = b->rapid_eviction_entries[i].target_addr;
+                int dup = 0;
+                for (uint32_t k = 0; k < removed_count; k++) {
+                    if (memcmp(removed[k], t, 32) == 0) { dup = 1; break; }
+                }
+                if (!dup) memcpy(removed[removed_count++], t, 32);
+            }
+        }
+        if (owned) mxd_free_block(&tmp);
+        if (h >= prev_block->height) break;
+    }
+
+    mxd_validator_score_entry_t *kept = calloc(count, sizeof(mxd_validator_score_entry_t));
+    if (!kept) { free(removed); return -1; }
+    uint32_t kept_count = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        int gone = 0;
+        for (uint32_t k = 0; k < removed_count; k++) {
+            if (memcmp(removed[k], entries[i].validator_address, 32) == 0) { gone = 1; break; }
+        }
+        if (!gone) kept[kept_count++] = entries[i];
+    }
+    if (kept_count != count) {
+        MXD_LOG_INFO("rsc", "v9: dropped %u evicted validator(s) from committed scores for h=%u (%u -> %u)",
+                     count - kept_count, prev_block->height + 1, count, kept_count);
+    }
+    free(removed);
+    *out_entries = kept;
+    *out_count = kept_count;
+    return 0;
+}
+
 int mxd_compute_block_validator_scores(const mxd_block_t *prev_block,
                                         const mxd_rapid_table_t *table,
                                         mxd_validator_score_entry_t **out_scores,
@@ -1867,6 +2020,25 @@ int mxd_compute_block_validator_scores(const mxd_block_t *prev_block,
                        prev_block->rapid_membership_entries[m].node_address, 32);
                 idx++;
             }
+        }
+    }
+
+    // v9: drop validators evicted on-chain (a same-block eviction wins over a JOIN).
+    if (mxd_get_required_protocol_version(prev_block->height + 1, mxd_get_network_type()) >= MXD_PROTOCOL_VERSION_9) {
+        mxd_validator_score_entry_t *kept = NULL;
+        uint32_t kept_count = 0;
+        if (v9_filter_evicted(prev_block, scores, total, &kept, &kept_count) != 0) {
+            free(scores);
+            return -1;
+        }
+        free(scores);
+        scores = kept;
+        total = kept_count;
+        if (total == 0) {
+            free(scores);
+            *out_scores = NULL;
+            *out_count = 0;
+            return 0;
         }
     }
 
@@ -1968,22 +2140,12 @@ int mxd_verify_block_validator_scores(const mxd_block_t *block) {
     }
 
     expected_count = base_count + new_count;
-    if (expected_count != block->validator_scores_count) {
-        MXD_LOG_ERROR("rsc", "Score count mismatch at height %u: expected %u, got %u",
-                     block->height, expected_count, block->validator_scores_count);
-        mxd_free_block(&prev_block);
-        return -1;
-    }
-
-    if (expected_count == 0) {
-        mxd_free_block(&prev_block);
-        return 0;
-    }
-
-    expected_scores = calloc(expected_count, sizeof(mxd_validator_score_entry_t));
-    if (!expected_scores) {
-        mxd_free_block(&prev_block);
-        return -1;
+    if (expected_count > 0) {
+        expected_scores = calloc(expected_count, sizeof(mxd_validator_score_entry_t));
+        if (!expected_scores) {
+            mxd_free_block(&prev_block);
+            return -1;
+        }
     }
 
     // Copy base + add new entries
@@ -2007,6 +2169,34 @@ int mxd_verify_block_validator_scores(const mxd_block_t *block) {
                 idx++;
             }
         }
+    }
+
+    // v9: drop validators evicted on-chain, exactly as the proposer did.
+    if (expected_count > 0 &&
+        mxd_get_required_protocol_version(block->height, mxd_get_network_type()) >= MXD_PROTOCOL_VERSION_9) {
+        mxd_validator_score_entry_t *kept = NULL;
+        uint32_t kept_count = 0;
+        if (v9_filter_evicted(&prev_block, expected_scores, expected_count, &kept, &kept_count) != 0) {
+            free(expected_scores);
+            mxd_free_block(&prev_block);
+            return -1;
+        }
+        free(expected_scores);
+        expected_scores = kept;
+        expected_count = kept_count;
+    }
+
+    if (expected_count != block->validator_scores_count) {
+        MXD_LOG_ERROR("rsc", "Score count mismatch at height %u: expected %u, got %u",
+                     block->height, expected_count, block->validator_scores_count);
+        free(expected_scores);
+        mxd_free_block(&prev_block);
+        return -1;
+    }
+    if (expected_count == 0) {
+        free(expected_scores);
+        mxd_free_block(&prev_block);
+        return 0;
     }
 
     // Apply deltas from prev_block
@@ -2137,7 +2327,30 @@ int mxd_rebuild_rapid_table_from_blockchain(mxd_rapid_table_t *table, uint32_t f
                      height, block.rapid_membership_count, (void*)block.rapid_membership_entries);
 
         size_t count_before = table->count;
-        mxd_apply_membership_deltas(table, &block, local_node_id);
+        /* Defense-in-depth (consensus-ingest fix): the network paths now reject
+         * blocks with forged validator-management entries before storing, so a
+         * post-fix local chain only ever holds authenticated entries. Re-verify
+         * here anyway to refuse poisoning the rebuilt table from a tampered
+         * rocksdb or from any block stored before this fix was deployed. Skip
+         * (don't apply) a failing block's deltas rather than aborting rebuild. */
+        if (mxd_verify_block_validator_entries(&block) == 0) {
+            mxd_apply_membership_deltas(table, &block, local_node_id);
+            /* v8+: replay peer-driven EVICT entries as well. The live path
+             * (mxd_process_block) applies them, but the rebuild only replayed
+             * JOINs, so a restarted node re-admitted every evicted validator:
+             * ghost entries, a signing order that diverges from the network's,
+             * and EVICT requests for the ghost rejected by proposers ("target
+             * not in active set"). Observed on mainnet node-1, 2026-10-09. */
+            if (block.version >= 8 && block.rapid_eviction_entries && block.rapid_eviction_count > 0) {
+                size_t before_evict = table->count;
+                mxd_apply_eviction_deltas(table, &block, NULL);
+                MXD_LOG_INFO("rsc", "Rebuild: applied %u eviction entries from height %u (table %zu -> %zu)",
+                             block.rapid_eviction_count, height, before_evict, table->count);
+            }
+        } else {
+            MXD_LOG_ERROR("rsc", "Block h=%u from local store has unauthenticated membership entries - NOT applying to rebuilt table",
+                          height);
+        }
         mxd_check_proposer_miss(table, &block);
 
         // v4+ optimization: only load scores from the LAST block (cumulative data),
@@ -3491,6 +3704,27 @@ static uint32_t mxd_compute_proposer_index(const uint8_t prev_block_hash[64],
     return raw_index % validator_count;
 }
 
+// Proposer-role log throttle. The consensus tick re-evaluates the role about
+// once a second; on a dormant chain (no transactions, nothing to propose) that
+// printed the same "This node is FALLBACK #n proposer" line ~3,600 times an
+// hour per validator. Log when (height, role) changes, else once a minute.
+static int proposer_role_log_due(uint32_t height, uint32_t role) {
+    static pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
+    static uint32_t last_height = UINT32_MAX, last_role = UINT32_MAX;
+    static uint64_t last_ms = 0;
+    uint64_t now = mxd_now_ms();
+    int due = 0;
+    pthread_mutex_lock(&m);
+    if (height != last_height || role != last_role || now - last_ms >= 60000ULL) {
+        last_height = height;
+        last_role = role;
+        last_ms = now;
+        due = 1;
+    }
+    pthread_mutex_unlock(&m);
+    return due;
+}
+
 // Check if this node is the proposer for the given height
 // Primary proposer = validators[height % validator_count]
 // After MXD_PROPOSER_TIMEOUT_MS, allows 1 fallback proposer to prevent permanent stalls
@@ -3500,30 +3734,62 @@ int mxd_is_proposer_for_height(const mxd_rapid_table_t *table, const uint8_t *lo
         return 0;
     }
 
+    // CONSENSUS FIX (proposer-divergence): decide the proposer from the canonical
+    // on-chain COMMITTED ordering (mxd_compute_proposer_order) with index
+    // (height % count) — IDENTICAL to mxd_validate_block_proposer's acceptance
+    // check — instead of the locally-sorted in-memory table + SHA512 index. The
+    // in-memory table is sorted by a local recompute whose stake input is not
+    // consensus-enforced, so table[idx] diverged across nodes → two nodes each
+    // believed they were the proposer → competing proposals, no quorum, chain
+    // wedge. Committed scores are identical on every node, so all nodes now
+    // select the same proposer and the same fallback sequence.
+    uint8_t order[MXD_MAX_PROPOSER_ORDER * MXD_ADDR32_LEN];
+    uint32_t count = 0;
+    if (mxd_compute_proposer_order(height, order, MXD_MAX_PROPOSER_ORDER, &count) == 0 && count > 0) {
+        uint32_t primary_index = height % count;
+        if (memcmp(local_address, order + (size_t)primary_index * MXD_ADDR32_LEN, MXD_ADDR32_LEN) == 0) {
+            if (proposer_role_log_due(height, 0)) {
+                MXD_LOG_INFO("rsc", "This node is PRIMARY proposer for height %u (index %u of %u, committed-score order)",
+                             height, primary_index, count);
+            }
+            return 1;
+        }
+        uint32_t retry_count = mxd_get_timeout_retry_count();
+        uint32_t max_fallbacks = (count > 1) ? (count - 1) : 0;
+        if (max_fallbacks > MXD_MAX_FALLBACK_RETRIES) {
+            max_fallbacks = MXD_MAX_FALLBACK_RETRIES;
+        }
+        uint32_t cycle_offset = (count > 0) ? (retry_count % count) : 0;
+        if (cycle_offset >= 1 && cycle_offset <= max_fallbacks) {
+            uint32_t fallback_index = (primary_index + cycle_offset) % count;
+            if (memcmp(local_address, order + (size_t)fallback_index * MXD_ADDR32_LEN, MXD_ADDR32_LEN) == 0) {
+                if (proposer_role_log_due(height, cycle_offset)) {
+                    MXD_LOG_INFO("rsc", "This node is FALLBACK #%u proposer for height %u (index %u of %u, committed-score order)",
+                                 cycle_offset, height, fallback_index, count);
+                }
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    // LEGACY FALLBACK: pre-v4 heights / no committed scores yet — use the
+    // in-memory table (this is the original path; only reached very early in a
+    // chain's life before validator_scores exist).
     uint32_t primary_index;
     if (prev_block_hash) {
-        // v5: deterministic from on-chain data
         primary_index = mxd_compute_proposer_index(prev_block_hash, height, table->count);
     } else {
-        // Pre-v5 fallback
         primary_index = height % table->count;
     }
-
-    // Check primary proposer (always allowed, no timeout needed) — v6: addr32
     if (table->nodes[primary_index] &&
         memcmp(local_address, table->nodes[primary_index]->node_address, 32) == 0) {
-        MXD_LOG_INFO("rsc", "This node is PRIMARY proposer for height %u (index %u of %zu validators)",
-                     height, primary_index, table->count);
+        if (proposer_role_log_due(height, 0)) {
+            MXD_LOG_INFO("rsc", "This node is PRIMARY proposer for height %u (index %u of %zu validators, legacy)",
+                         height, primary_index, table->count);
+        }
         return 1;
     }
-
-    // After timeout, allow fallback proposers to prevent permanent chain stalls.
-    // At each retry, exactly ONE validator is eligible — the one at cycle_offset
-    // positions past primary. Cycle_offset is retry_count mod table->count, which
-    // guarantees no wrap-around duplicates (a previous version iterated r=1..9 with
-    // modular wrap, causing every validator to match at retry >= table->count and
-    // creating simultaneous-proposer forks). After a full cycle the retry counter
-    // resets in mxd_increment_retry_count, and the primary gets another chance.
     uint32_t retry_count = mxd_get_timeout_retry_count();
     uint32_t max_fallbacks = (table->count > 1) ? (table->count - 1) : 0;
     if (max_fallbacks > MXD_MAX_FALLBACK_RETRIES) {
@@ -3533,9 +3799,11 @@ int mxd_is_proposer_for_height(const mxd_rapid_table_t *table, const uint8_t *lo
     if (cycle_offset >= 1 && cycle_offset <= max_fallbacks) {
         uint32_t fallback_index = (primary_index + cycle_offset) % table->count;
         if (table->nodes[fallback_index] &&
-            memcmp(local_address, table->nodes[fallback_index]->node_address, 32) == 0) {   // v6: addr32
-            MXD_LOG_INFO("rsc", "This node is FALLBACK #%u proposer for height %u (index %u of %zu validators)",
-                         cycle_offset, height, fallback_index, table->count);
+            memcmp(local_address, table->nodes[fallback_index]->node_address, 32) == 0) {
+            if (proposer_role_log_due(height, cycle_offset)) {
+                MXD_LOG_INFO("rsc", "This node is FALLBACK #%u proposer for height %u (index %u of %zu validators, legacy)",
+                             cycle_offset, height, fallback_index, table->count);
+            }
             return 1;
         }
     }
@@ -3601,11 +3869,24 @@ int mxd_consensus_tick(mxd_rapid_table_t *table, const uint8_t *local_address,
         uint64_t now_debug = mxd_now_ms();
         if (now_debug - last_tick_debug >= 10000) {
             last_tick_debug = now_debug;
-            uint32_t pidx = (table->count > 0) ? (next_height % table->count) : 0;
+            // Show the CANONICAL expected proposer (committed-score order) so the
+            // log matches the actual decision (mxd_is_proposer_for_height) and is
+            // identical across nodes — the divergent in-memory table[pidx] value
+            // is what masked the proposer-divergence bug. Falls back to the table
+            // only when no committed order exists yet (very early chain).
+            uint8_t corder[MXD_MAX_PROPOSER_ORDER * MXD_ADDR32_LEN];
+            uint32_t ccount = 0;
+            uint32_t pidx = 0;
             char local_hex[65] = {0}, expected_hex[65] = {0};   // v6: addr32 (was 41)
             for (int i = 0; i < 32; i++) snprintf(&local_hex[i*2], 3, "%02x", local_address[i]);
-            if (table->count > 0 && table->nodes[pidx]) {
-                for (int i = 0; i < 32; i++) snprintf(&expected_hex[i*2], 3, "%02x", table->nodes[pidx]->node_address[i]);
+            if (mxd_compute_proposer_order(next_height, corder, MXD_MAX_PROPOSER_ORDER, &ccount) == 0 && ccount > 0) {
+                pidx = next_height % ccount;
+                for (int i = 0; i < 32; i++) snprintf(&expected_hex[i*2], 3, "%02x", corder[(size_t)pidx * MXD_ADDR32_LEN + i]);
+            } else if (table->count > 0) {
+                pidx = next_height % table->count;
+                if (table->nodes[pidx]) {
+                    for (int i = 0; i < 32; i++) snprintf(&expected_hex[i*2], 3, "%02x", table->nodes[pidx]->node_address[i]);
+                }
             }
             uint32_t retries = mxd_get_timeout_retry_count();
             MXD_LOG_INFO("rsc", "Consensus tick debug: next_height=%u, table_count=%zu, proposer_idx=%u, local=%s, expected=%s, last_proposed=%u, retries=%u",
@@ -3673,7 +3954,7 @@ int mxd_consensus_tick(mxd_rapid_table_t *table, const uint8_t *local_address,
 
     // Log proposal conditions
     if (is_proposer) {
-        MXD_LOG_INFO("rsc", "Proposer check: current_block=%p, next_height=%u, last_proposed=%u, will_propose=%s",
+        MXD_LOG_DEBUG("rsc", "Proposer check: current_block=%p, next_height=%u, last_proposed=%u, will_propose=%s",
                      (void*)current_block, next_height, last_proposed_height,
                      (!current_block && next_height > last_proposed_height) ? "YES" : "NO");
     }

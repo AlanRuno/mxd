@@ -7,6 +7,7 @@ extern "C" {
 
 #include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 #include "mxd_blockchain.h"
 
 int mxd_should_relay_block(const mxd_block_t *block, int just_signed);
@@ -192,6 +193,23 @@ int mxd_get_peer_connections(mxd_peer_info_t* peer_info, size_t* count);
 
 // Get unified peer list (all peers we've communicated with)
 int mxd_get_unified_peers(mxd_peer_info_t* peer_info, size_t* count);
+
+// Keepalive decision for one peer record (pure function, unit-tested).
+//   now           current time
+//   activated_at  when the record was (re)activated (0 = unknown)
+//   last_sent     last time we sent the peer anything (0 = never)
+//   last_received last time anything valid arrived from the peer (0 = never)
+// TIMED_OUT when the peer has been silent for more than timeout_s, measured from
+// last_received or — if we never heard from it — from activated_at; PING when we
+// have not sent anything for interval_s (or never); OK otherwise.
+typedef enum {
+    MXD_PEER_LIVENESS_OK = 0,
+    MXD_PEER_LIVENESS_PING = 1,
+    MXD_PEER_LIVENESS_TIMED_OUT = 2
+} mxd_peer_liveness_t;
+
+mxd_peer_liveness_t mxd_p2p_peer_liveness(time_t now, time_t activated_at, time_t last_sent,
+                                          time_t last_received, int interval_s, int timeout_s);
 
 // Get node's public and private keys
 int mxd_get_node_keys(uint8_t *public_key_out, uint8_t *private_key_out);

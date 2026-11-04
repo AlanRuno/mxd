@@ -5,7 +5,7 @@
     "data_dir": "./data",
     "node_name": "MXD Default Node",
     "initial_stake": 120.0,
-    "preferred_sign_algo": 1,
+    "preferred_sign_algo": 2,
     "bootstrap_nodes": [
         "34.31.52.198:8000"
     ],

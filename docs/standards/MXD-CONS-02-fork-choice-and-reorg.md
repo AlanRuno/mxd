@@ -216,7 +216,7 @@ The reorg implementation was validated on a 5-node testnet (`mxd-test-node-testi
 - 0 validator dropouts
 - Chain advanced 103 blocks at average 1.07 blocks/round under traffic
 
-Soak telemetry is archived at `F:/Proyectos/v7_soak_archive.log`.
+Soak telemetry is archived in the project's operational records (`v7_soak_archive.log`).
 
 ## 10. References
 
@@ -229,7 +229,7 @@ Soak telemetry is archived at `F:/Proyectos/v7_soak_archive.log`.
 - **Tests:**
   - `tests/test_fork_choice.c` — synthetic fork-choice scenarios
   - `tests/test_reorg.c` — reorg primitive (UTXO reversal, mempool re-add, depth limit, genesis untouchable)
-- **Audit:** `F:/Proyectos/AUDIT_2026-05-07_v7_pre_mainnet.md` F7-6 (the finding this spec answers)
+- **Audit:** `AUDIT_2026-05-07_v7_pre_mainnet.md` F7-6 (the finding this spec answers)
 - **MXD-CONS-01** for the validation-chain canonical bytes that MXD-CONS-02 reorgs preserve.
 
 ## 11. Changelog

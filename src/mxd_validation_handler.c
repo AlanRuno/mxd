@@ -31,7 +31,16 @@ typedef struct {
     int used;
 } pending_sig_entry_t;
 
-#define MAX_PENDING_SIGS 32
+// HARDENING (buffer pressure at scale): sized to hold a full block's worth of
+// out-of-order non-proposer signatures at the maximum supported validator set
+// (MXD_MAX_PROPOSER_ORDER = 256). The previous value of 32 overflows once the
+// validator count approaches ~32 (or two blocks race), and overflow drops
+// signatures (buffer_pending_sig logs "buffer full"), which forces under-quorum
+// blocks into O(peers) reconcile broadcasts — a network-amplification vector.
+// At ~4.7 KB/entry this is ~1.2 MB of static memory, negligible per node.
+// No behavior change at the current N=6 (the buffer is rarely more than a few
+// slots deep); this is pure future-proofing for validator-set growth.
+#define MAX_PENDING_SIGS 256
 #define PENDING_SIG_EXPIRY_SEC 15
 
 static pending_sig_entry_t pending_sig_buffer[MAX_PENDING_SIGS];
@@ -41,6 +50,13 @@ static void buffer_pending_sig(const uint8_t *block_hash, const uint8_t *validat
                                uint8_t algo_id, const uint8_t *signature, uint16_t sig_len,
                                uint32_t chain_position, uint64_t timestamp) {
     time_t now = time(NULL);
+
+    // SECURITY (3.5): defense-in-depth — never memcpy more than the fixed
+    // signature[MXD_SIGNATURE_MAX] field holds, regardless of caller validation.
+    if (sig_len > MXD_SIGNATURE_MAX) {
+        MXD_LOG_WARN("validation", "buffer_pending_sig: oversized sig_len=%u dropped", sig_len);
+        return;
+    }
 
     // Check for duplicate before buffering
     for (int i = 0; i < MAX_PENDING_SIGS; i++) {
@@ -297,7 +313,25 @@ void mxd_validation_message_handler(const char *address, uint16_t port,
             memcpy(&sig_len_net, data + offset, 2);
             uint16_t sig_len = ntohs(sig_len_net);
             offset += 2;
-            
+
+            // SECURITY (3.5): bound the attacker-controlled signature length
+            // against the algorithm's fixed signature size BEFORE it is used to
+            // slice the payload and memcpy into fixed MXD_SIGNATURE_MAX (4627 B)
+            // buffers (the buffer_pending_sig static buffer and the
+            // validator_signature_t store). The payload check below only bounds
+            // sig_len against the (up to ~1 MB) payload, so without this a
+            // crafted sig_len up to 65535 overflows those fixed buffers. A valid
+            // signature is always exactly the algorithm's signature size.
+            {
+                size_t expected_sig_len = mxd_sig_signature_len(algo_id);
+                if (expected_sig_len == 0 || sig_len != expected_sig_len) {
+                    MXD_LOG_WARN("validation",
+                                 "Rejecting VALIDATION_SIGNATURE: bad algo_id=%u / sig_len=%u (expected %zu)",
+                                 algo_id, sig_len, expected_sig_len);
+                    return;
+                }
+            }
+
             if (offset + sig_len + 4 + 8 > payload_length) {
                 MXD_LOG_WARN("validation", "Invalid VALIDATION_SIGNATURE signature length: %u", sig_len);
                 return;
@@ -415,7 +449,7 @@ void mxd_validation_message_handler(const char *address, uint16_t port,
         }
         
         case MXD_MSG_VALIDATION_CHAIN: {
-            MXD_LOG_INFO("validation", "Processing validation chain message: len=%zu", payload_length);
+            MXD_LOG_DEBUG("validation", "Processing validation chain message: len=%zu", payload_length);
             
             // BLOCKER FIX: Deserialize and process the validation chain
             uint8_t block_hash[64];
@@ -424,8 +458,11 @@ void mxd_validation_message_handler(const char *address, uint16_t port,
             
             if (deserialize_validation_chain(payload, payload_length, block_hash, &signatures, &sig_count) == 0) {
                 if (sig_count > 0 && signatures) {
-                    if (mxd_process_incoming_validation_chain(block_hash, signatures, sig_count) == 0) {
-                        MXD_LOG_INFO("validation", "Successfully processed validation chain with %u signatures", sig_count);
+                    int chain_rc = mxd_process_incoming_validation_chain(block_hash, signatures, sig_count);
+                    if (chain_rc >= 0) {
+                        if (chain_rc > 0) {
+                            MXD_LOG_INFO("validation", "Validation chain catch-up applied from a peer chain of %u signatures", sig_count);
+                        }
 
                         // Drain buffered sigs and trigger chain reaction
                         pthread_mutex_lock(&validation_sig_mutex);
@@ -439,7 +476,7 @@ void mxd_validation_message_handler(const char *address, uint16_t port,
                             mxd_free_block(&chain_block);
                         }
                     } else {
-                        MXD_LOG_WARN("validation", "Failed to process validation chain");
+                        MXD_LOG_DEBUG("validation", "Validation chain ignored (block unknown or store failed)");
                     }
                     free(signatures);
                 }
@@ -534,13 +571,13 @@ void mxd_validation_message_handler(const char *address, uint16_t port,
             }
             
             const uint8_t *block_hash = (const uint8_t *)payload;
-            MXD_LOG_INFO("validation", "Processing request for validation chain");
+            MXD_LOG_DEBUG("validation", "Processing request for validation chain");
             
             // BLOCKER FIX: Actually send the validation chain
             mxd_block_t block;
             memset(&block, 0, sizeof(block));
             if (mxd_retrieve_block_by_hash(block_hash, &block) != 0) {
-                MXD_LOG_WARN("validation", "Block not found for validation chain request");
+                MXD_LOG_DEBUG("validation", "Block not found for validation chain request");
                 return;
             }
             
@@ -548,7 +585,7 @@ void mxd_validation_message_handler(const char *address, uint16_t port,
             size_t chain_len = 0;
             if (serialize_validation_chain(&block, &chain_data, &chain_len) == 0 && chain_data) {
                 mxd_send_message(address, port, MXD_MSG_VALIDATION_CHAIN, chain_data, chain_len);
-                MXD_LOG_INFO("validation", "Sent validation chain with %u signatures", block.validation_count);
+                MXD_LOG_DEBUG("validation", "Sent validation chain with %u signatures", block.validation_count);
                 free(chain_data);
             }
             

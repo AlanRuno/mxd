@@ -195,6 +195,124 @@ static int compare_scored_validators(const void *a, const void *b) {
   return memcmp(va->address, vb->address, 32);
 }
 
+#ifndef MXD_MAX_PROPOSER_ORDER
+#define MXD_MAX_PROPOSER_ORDER 256
+#endif
+
+// CONSENSUS FIX (proposer-divergence): canonical proposer ordering for `height`,
+// derived SOLELY from on-chain COMMITTED data of block (height-1) so every node
+// computes the IDENTICAL order:
+//   - v4+ : the committed validator_scores, ranked by the chain_score formula
+//           below (descending, address tiebreak).
+//   - else: the membership list of block (height-1) (genesis fallback).
+// out_order is a flat buffer of at least max*MXD_ADDR32_LEN bytes; entry i is at
+// out_order + i*MXD_ADDR32_LEN. Sets *out_count. Returns 0 on success.
+//
+// Why committed scores (not a local recompute): stake_amount is NOT
+// independently enforced across nodes, so re-deriving scores from each node's
+// own UTXO balance (as the in-memory rapid_table sort does) diverges and makes
+// nodes disagree on the proposer → competing proposals, no quorum, chain wedge.
+// The committed bytes are identical on every node (covered by
+// validator_scores_root), so ordering from them is deterministic network-wide.
+//
+// !!! The chain_score formula below MUST stay byte-identical to the one in
+// !!! mxd_validate_block_proposer() — the proposer DECISION (this, via
+// !!! mxd_is_proposer_for_height) and ACCEPTANCE (mxd_validate_block_proposer)
+// !!! must agree. If you change one, change both.
+int mxd_compute_proposer_order(uint32_t height, uint8_t *out_order,
+                               uint32_t max, uint32_t *out_count) {
+  if (!out_order || !out_count || max == 0 || height == 0) {
+    return -1;
+  }
+
+  mxd_block_t prev_block;
+  memset(&prev_block, 0, sizeof(prev_block));
+  if (mxd_retrieve_block_by_height(height - 1, &prev_block) != 0) {
+    return -1;
+  }
+
+  int rc = -1;
+
+  if (prev_block.validator_scores_count > 0 && prev_block.validator_scores) {
+    uint32_t count = prev_block.validator_scores_count;
+    if (count <= max) {
+      scored_validator_t *sorted = malloc((size_t)count * sizeof(scored_validator_t));
+      if (sorted) {
+        uint64_t total_stake = 0;
+        for (uint32_t i = 0; i < count; i++) {
+          total_stake += prev_block.validator_scores[i].stake_amount;
+        }
+        if (total_stake == 0) total_stake = 1;
+
+        for (uint32_t i = 0; i < count; i++) {
+          const mxd_validator_score_entry_t *e = &prev_block.validator_scores[i];
+          memcpy(sorted[i].address, e->validator_address, 32);
+
+          uint64_t bsj = e->blocks_since_joined > 0 ? e->blocks_since_joined : 1;
+          uint64_t stake_score;
+          if (e->stake_amount > UINT64_MAX / 10000ULL) {
+              stake_score = (e->stake_amount / total_stake) * 10000ULL;
+          } else {
+              stake_score = (e->stake_amount * 10000ULL) / total_stake;
+          }
+          if (stake_score > 10000) stake_score = 10000;
+          uint64_t proposal_score;
+          if ((uint64_t)e->blocks_proposed > UINT64_MAX / 10000ULL) {
+              proposal_score = ((uint64_t)e->blocks_proposed / bsj) * 10000ULL;
+          } else {
+              proposal_score = ((uint64_t)e->blocks_proposed * 10000ULL) / bsj;
+          }
+          if (proposal_score > 10000) proposal_score = 10000;
+          uint64_t participation_score;
+          if ((uint64_t)e->blocks_signed > UINT64_MAX / 10000ULL) {
+              participation_score = ((uint64_t)e->blocks_signed / bsj) * 10000ULL;
+          } else {
+              participation_score = ((uint64_t)e->blocks_signed * 10000ULL) / bsj;
+          }
+          if (participation_score > 10000) participation_score = 10000;
+          uint64_t avg_latency = e->blocks_signed > 0 ? e->total_latency_ms / e->blocks_signed : 10000;
+          uint64_t latency_score = (avg_latency >= 10000) ? 0 : (10000 - avg_latency);
+
+          sorted[i].chain_score = (stake_score * 30 + proposal_score * 25 +
+                                    participation_score * 25 + latency_score * 20) / 100;
+        }
+
+        qsort(sorted, count, sizeof(scored_validator_t), compare_scored_validators);
+        for (uint32_t i = 0; i < count; i++) {
+          memcpy(out_order + (size_t)i * MXD_ADDR32_LEN, sorted[i].address, MXD_ADDR32_LEN);
+        }
+        *out_count = count;
+        free(sorted);
+        rc = 0;
+      }
+    }
+  } else {
+    // Pre-v4 / no committed scores: raw membership insertion order of block N-1
+    // (genesis fallback when N-1 carries none) — mirrors the pre-v4 branch of
+    // mxd_validate_block_proposer.
+    uint32_t mc = prev_block.rapid_membership_count;
+    mxd_rapid_membership_entry_t *mem = prev_block.rapid_membership_entries;
+    if (mc == 0) {
+      mxd_free_block(&prev_block);
+      memset(&prev_block, 0, sizeof(prev_block));
+      if (mxd_retrieve_block_by_height(0, &prev_block) == 0) {
+        mc = prev_block.rapid_membership_count;
+        mem = prev_block.rapid_membership_entries;
+      }
+    }
+    if (mc > 0 && mc <= max && mem) {
+      for (uint32_t i = 0; i < mc; i++) {
+        memcpy(out_order + (size_t)i * MXD_ADDR32_LEN, mem[i].node_address, MXD_ADDR32_LEN);
+      }
+      *out_count = mc;
+      rc = 0;
+    }
+  }
+
+  mxd_free_block(&prev_block);
+  return rc;
+}
+
 // Validate that the block proposer is valid (primary or fallback)
 static int mxd_validate_block_proposer(const mxd_block_t *block) {
   if (!block) {
@@ -997,6 +1115,166 @@ int mxd_append_eviction_entry(mxd_block_t *block,
   memcpy(entry->signature, signature, signature_length);
 
   block->rapid_eviction_count++;
+  return 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Receive-path authentication for block-embedded validator-management entries.
+ *
+ * SECURITY (consensus-ingest fix, 2026-06): rapid_membership_entries and
+ * rapid_eviction_entries are NOT covered by mxd_calculate_block_hash, and the
+ * validator validation-chain signs only the block_hash — so neither commits to
+ * the entry set. Until now the per-entry MXD-VAL-V1 signatures were verified
+ * ONLY on the proposer's append path (mxd_append_membership_entry /
+ * mxd_append_eviction_entry); the receive/apply path
+ * (mxd_apply_membership_deltas / mxd_apply_eviction_deltas) mutated the
+ * rapid_table with no crypto check. That let any peer staple forged JOIN/EVICT
+ * entries onto an otherwise-valid finalized block and inject Sybil validators /
+ * evict honest ones on every node that ingested it.
+ *
+ * These helpers re-run, on receipt, the SAME cryptographic + structural checks
+ * the proposer ran. The canonical byte layouts below MUST stay byte-identical
+ * to mxd_append_membership_entry (JOIN, op_type 0x00) and
+ * mxd_append_eviction_entry (EVICT, op_type 0x02) above — keep them in sync.
+ *
+ * Deliberately EXCLUDED: the stake/balance threshold and rapid_table-admission
+ * checks. Those read node-local, time-varying UTXO/table state; re-evaluating
+ * them on receipt could make an honest peer reject a block a different honest
+ * proposer validly built, splitting consensus. The checks below are a pure
+ * function of the entry bytes and so are identical on every node. (Admission
+ * non-determinism is tracked separately; if it is ever re-verified on receipt
+ * it MUST be height-pinned to block N-1.)
+ * ------------------------------------------------------------------------- */
+static int verify_membership_entry_crypto(const mxd_rapid_membership_entry_t *entry,
+                                          uint32_t block_height) {
+  if (!entry) {
+    return -1;
+  }
+  uint8_t algo = entry->algo_id;
+  if (algo != MXD_SIGALG_ED25519 && algo != MXD_SIGALG_DILITHIUM5) {
+    return -1;
+  }
+  /* v10: a block-embedded JOIN must be a Dilithium5 identity (genesis exempt).
+   * Consensus-critical: every node rejects a v10 block carrying an Ed25519 JOIN. */
+  if (block_height > 0 && algo == MXD_SIGALG_ED25519 &&
+      mxd_get_required_protocol_version(block_height, mxd_get_network_type()) >= MXD_PROTOCOL_VERSION_10) {
+    MXD_LOG_ERROR("blockchain", "Block h=%u: Ed25519 JOIN entry not admitted (protocol v10 requires Dilithium5)",
+                  block_height);
+    return -1;
+  }
+  if (entry->public_key_length != mxd_sig_pubkey_len(algo)) {
+    return -1;
+  }
+  if (entry->signature_length != mxd_sig_signature_len(algo) ||
+      entry->signature_length > MXD_SIGNATURE_MAX) {
+    return -1;
+  }
+
+  /* Genesis (height 0) JOIN signatures were collected over a different digest
+   * (empty-block consensus time) and accepted inbound; matching
+   * mxd_append_membership_entry, we skip sig-verify at genesis but still
+   * enforce address-derivation. */
+  if (block_height > 0) {
+    uint8_t sign_data[MXD_DOMAIN_TAG_VAL_LEN + 1 + 32 + 8];
+    size_t off = 0;
+    memcpy(sign_data + off, MXD_DOMAIN_TAG_VAL, MXD_DOMAIN_TAG_VAL_LEN);
+    off += MXD_DOMAIN_TAG_VAL_LEN;
+    sign_data[off++] = 0x00; /* op_type = JOIN */
+    memcpy(sign_data + off, entry->node_address, 32);
+    off += 32;
+    uint64_t ts_be = mxd_htonll(entry->timestamp);
+    memcpy(sign_data + off, &ts_be, 8);
+
+    if (mxd_sig_verify(algo, entry->signature, entry->signature_length,
+                       sign_data, sizeof(sign_data), entry->public_key) != 0) {
+      return -1; /* Invalid JOIN signature */
+    }
+  }
+
+  uint8_t derived_addr[MXD_ADDR32_LEN];
+  if (mxd_derive_address(algo, entry->public_key, entry->public_key_length,
+                         derived_addr) != 0) {
+    return -1;
+  }
+  if (memcmp(entry->node_address, derived_addr, MXD_ADDR32_LEN) != 0) {
+    return -1;
+  }
+  return 0;
+}
+
+static int verify_eviction_entry_crypto(const mxd_rapid_eviction_entry_t *entry) {
+  if (!entry) {
+    return -1;
+  }
+  uint8_t algo = entry->evictor_algo_id;
+  if (algo != MXD_SIGALG_ED25519 && algo != MXD_SIGALG_DILITHIUM5) {
+    return -1;
+  }
+  if (entry->evictor_public_key_length != mxd_sig_pubkey_len(algo)) {
+    return -1;
+  }
+  if (entry->signature_length != mxd_sig_signature_len(algo) ||
+      entry->signature_length > MXD_SIGNATURE_MAX) {
+    return -1;
+  }
+
+  uint8_t sign_data[MXD_DOMAIN_TAG_VAL_LEN + 1 + 32 + 32 + 8];
+  size_t off = 0;
+  memcpy(sign_data + off, MXD_DOMAIN_TAG_VAL, MXD_DOMAIN_TAG_VAL_LEN);
+  off += MXD_DOMAIN_TAG_VAL_LEN;
+  sign_data[off++] = 0x02; /* op_type = EVICT */
+  memcpy(sign_data + off, entry->target_addr, 32);  off += 32;
+  memcpy(sign_data + off, entry->evictor_addr, 32); off += 32;
+  uint64_t ts_be = mxd_htonll(entry->timestamp);
+  memcpy(sign_data + off, &ts_be, 8);
+
+  if (mxd_sig_verify(algo, entry->signature, entry->signature_length,
+                     sign_data, sizeof(sign_data), entry->evictor_public_key) != 0) {
+    return -1; /* Invalid EVICT signature */
+  }
+
+  uint8_t derived_addr[MXD_ADDR32_LEN];
+  if (mxd_derive_address(algo, entry->evictor_public_key,
+                         entry->evictor_public_key_length, derived_addr) != 0) {
+    return -1;
+  }
+  if (memcmp(entry->evictor_addr, derived_addr, MXD_ADDR32_LEN) != 0) {
+    return -1;
+  }
+  return 0;
+}
+
+/* Authenticate ALL block-embedded validator-management entries before the
+ * block is stored or its deltas are applied. Returns 0 iff every membership
+ * and (v8+) eviction entry passes per-entry cryptographic verification; -1 if
+ * any entry is forged/malformed. Callers on every block-ingest path MUST
+ * REJECT the block (do not store, do not apply) when this returns -1. */
+int mxd_verify_block_validator_entries(const mxd_block_t *block) {
+  if (!block) {
+    return -1;
+  }
+  if (block->rapid_membership_entries && block->rapid_membership_count > 0) {
+    for (uint32_t i = 0; i < block->rapid_membership_count; i++) {
+      if (verify_membership_entry_crypto(&block->rapid_membership_entries[i],
+                                         block->height) != 0) {
+        MXD_LOG_ERROR("blockchain",
+                      "Block h=%u membership entry %u failed authentication - rejecting block",
+                      block->height, i);
+        return -1;
+      }
+    }
+  }
+  if (block->version >= 8 && block->rapid_eviction_entries &&
+      block->rapid_eviction_count > 0) {
+    for (uint32_t i = 0; i < block->rapid_eviction_count; i++) {
+      if (verify_eviction_entry_crypto(&block->rapid_eviction_entries[i]) != 0) {
+        MXD_LOG_ERROR("blockchain",
+                      "Block h=%u eviction entry %u failed authentication - rejecting block",
+                      block->height, i);
+        return -1;
+      }
+    }
+  }
   return 0;
 }
 

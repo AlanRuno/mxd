@@ -61,6 +61,22 @@ int mxd_fill_block_gaps(uint32_t *gaps, uint32_t max_gaps, uint32_t *gap_count);
 // Call before sync to avoid re-requesting blocks we already have.
 void mxd_advance_height_pointer(void);
 
+// RISK-1 (A) equivocation vote book: atomically commit `height` to `block_hash`
+// as this node's single vote there. Returns 0 if committed (or already ours —
+// OK to sign), 1 if already committed to a DIFFERENT hash (equivocation — must
+// NOT sign), -1 on storage error (fail-closed — must NOT sign). Persistent and
+// never cleared by reorg, so an honest node can never sign two different blocks
+// at the same height across reorg or restart.
+int mxd_votebook_claim(uint32_t height, const uint8_t block_hash[64]);
+
+// RISK-2 deep-fork recovery: roll the canonical chain back to `target_height`,
+// demoting every block above it (reverse UTXO deltas, re-pool user txs, delete
+// height keys) and setting current_height = target_height+1. The emptied heights
+// are then re-filled by normal forward sync. Used to escape a losing minority
+// fork deeper than MXD_MAX_REORG_DEPTH once the competing chain is known
+// quorum-certified. Returns 0 on success (incl. no-op), -1 on error.
+int mxd_rollback_to_height(uint32_t target_height);
+
 #ifdef __cplusplus
 }
 #endif

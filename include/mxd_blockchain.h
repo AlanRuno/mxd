@@ -119,7 +119,25 @@ int mxd_validate_block(const mxd_block_t *block);
 
 int mxd_verify_validation_chain(const mxd_block_t *block);
 
+// SECURITY (3.2): timestamp-independent cryptographic verification of the
+// validation chain. Unlike mxd_verify_validation_chain (which also enforces a
+// ±60s signature-liveness window), this checks only cryptographic validity, so
+// it can serve as a HARD gate before fork-choice/reorg on historical blocks
+// without spurious clock-skew rejections. Returns 0 iff every counted
+// signature verifies against its signer's registered public key.
+int mxd_verify_validation_chain_crypto(const mxd_block_t *block);
+
 int mxd_calculate_block_hash(const mxd_block_t *block, uint8_t hash[64]);
+
+// CONSENSUS FIX (proposer-divergence): canonical proposer ordering for a height,
+// derived from block(height-1)'s on-chain COMMITTED validator_scores (v4+) or
+// membership (pre-v4). out_order is a flat buffer of at least
+// max*MXD_ADDR32_LEN bytes (entry i at out_order + i*MXD_ADDR32_LEN); *out_count
+// is set. Returns 0 on success. SINGLE source of proposer ordering — the
+// proposer decision and acceptance must both use it so all nodes agree.
+#define MXD_MAX_PROPOSER_ORDER 256
+int mxd_compute_proposer_order(uint32_t height, uint8_t *out_order,
+                               uint32_t max, uint32_t *out_count);
 
 int mxd_calculate_contracts_state_root(const mxd_block_t *block, uint8_t root[64]);
 
@@ -147,6 +165,17 @@ int mxd_append_eviction_entry(mxd_block_t *block,
                               const uint8_t *signature,
                               uint16_t signature_length,
                               uint64_t timestamp);
+
+// SECURITY (consensus-ingest fix): re-verify every block-embedded JOIN
+// (membership) and v8+ EVICT (eviction) entry's MXD-VAL-V1 signature and
+// address-derivation on the RECEIVE path. The entries are excluded from the
+// block hash and the validation-chain signs only block_hash, so without this
+// a peer could staple forged validator-management entries onto a valid block.
+// Returns 0 iff all entries authenticate; -1 if any is forged/malformed.
+// Every block-ingest path MUST reject (not store/apply) the block on -1.
+// NOTE: deterministic crypto/structural checks only — NOT the stake/admission
+// checks, which depend on node-local state and would risk consensus divergence.
+int mxd_verify_block_validator_entries(const mxd_block_t *block);
 
 int mxd_block_has_membership_quorum(const mxd_block_t *block, size_t rapid_table_size);
 

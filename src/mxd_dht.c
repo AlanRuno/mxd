@@ -164,6 +164,26 @@ int mxd_init_dht(const uint8_t* public_key) {
     return 0;
 }
 
+/* Algorithm used when data/node_keys.v2 does not exist and a fresh node
+ * identity must be generated. Set from main() via mxd_dht_set_keygen_algo()
+ * (CLI --algo, else config preferred_sign_algo). Default Dilithium5 (ML-DSA-87):
+ * new validator identities are post-quantum unless explicitly overridden.
+ * A persisted keyfile always wins over this setting. */
+static uint8_t keygen_algo_id = MXD_SIGALG_DILITHIUM5;
+
+int mxd_dht_set_keygen_algo(uint8_t algo_id) {
+    if (algo_id != MXD_SIGALG_ED25519 && algo_id != MXD_SIGALG_DILITHIUM5) {
+        MXD_LOG_ERROR("dht", "Invalid keygen algo_id %u (must be 1=Ed25519 or 2=Dilithium5)", algo_id);
+        return -1;
+    }
+    keygen_algo_id = algo_id;
+    return 0;
+}
+
+uint8_t mxd_dht_get_keygen_algo(void) {
+    return keygen_algo_id;
+}
+
 static int load_or_generate_node_keypair(uint8_t *algo_id, uint8_t *public_key, uint8_t *private_key) {
     const char* keyfile_v2 = "data/node_keys.v2";
     const char* legacy_pubkey = "data/node_pubkey.bin";
@@ -212,8 +232,10 @@ static int load_or_generate_node_keypair(uint8_t *algo_id, uint8_t *public_key, 
         MXD_LOG_WARN("dht", "Generating new v2 keypair (legacy files will be ignored)");
     }
     
-    *algo_id = MXD_SIGALG_ED25519;
-    
+    *algo_id = keygen_algo_id;
+    MXD_LOG_INFO("dht", "No node keypair found, generating a new identity: algo=%s",
+                 mxd_sig_alg_name(*algo_id));
+
     if (mxd_sig_keygen(*algo_id, public_key, private_key) != 0) {
         MXD_LOG_ERROR("dht", "Failed to generate keypair for algo %s", mxd_sig_alg_name(*algo_id));
         return -1;

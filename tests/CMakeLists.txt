@@ -91,6 +91,22 @@ target_link_libraries(mxd_p2p_tests
     pthread
 )
 
+# Keepalive decision (pure) — the liveness rule behind the reconnect churn
+# observed on mainnet (2026-11): busy links were torn down every timeout.
+add_executable(mxd_p2p_keepalive_tests
+    test_p2p_keepalive.c
+)
+
+target_link_libraries(mxd_p2p_keepalive_tests
+    mxd
+    ${OPENSSL_LIBRARIES}
+    sodium
+    pthread
+)
+
+add_test(NAME p2p_keepalive_tests COMMAND mxd_p2p_keepalive_tests)
+set_tests_properties(p2p_keepalive_tests PROPERTIES ENVIRONMENT "MXD_ENABLE_PEER_CONNECTOR=0")
+
 add_executable(mxd_smart_contracts_tests
     test_smart_contracts.c
 )
@@ -140,6 +156,38 @@ target_link_libraries(mxd_checkpoints_tests
 
 add_test(NAME checkpoints_tests COMMAND mxd_checkpoints_tests)
 set_tests_properties(checkpoints_tests PROPERTIES ENVIRONMENT "MXD_ENABLE_PEER_CONNECTOR=0")
+
+# Fault-injection tests for the safe-by-construction consensus fixes (RISK-1
+# equivocation vote book + RISK-2 deep-fork rollback) — paths the live BFT mesh
+# cannot exercise. See DESIGN_consensus_safe_by_construction_2026-06-22.md.
+add_executable(mxd_consensus_safety_tests
+    test_consensus_safety.c
+)
+
+target_link_libraries(mxd_consensus_safety_tests
+    mxd
+    ${OPENSSL_LIBRARIES}
+    sodium
+)
+
+add_test(NAME consensus_safety_tests COMMAND mxd_consensus_safety_tests)
+set_tests_properties(consensus_safety_tests PROPERTIES ENVIRONMENT "MXD_ENABLE_PEER_CONNECTOR=0")
+
+# Validation-chain reconciliation: peer-chain prefix compatibility and the
+# per-(height, hash) request backoff that replaced the permanent re-request
+# loop observed on mainnet (2026-10/11).
+add_executable(mxd_validation_reconcile_tests
+    test_validation_reconcile.c
+)
+
+target_link_libraries(mxd_validation_reconcile_tests
+    mxd
+    ${OPENSSL_LIBRARIES}
+    sodium
+)
+
+add_test(NAME validation_reconcile_tests COMMAND mxd_validation_reconcile_tests)
+set_tests_properties(validation_reconcile_tests PROPERTIES ENVIRONMENT "MXD_ENABLE_PEER_CONNECTOR=0")
 
 add_executable(mxd_data_quantization_tests
     test_data_quantization.c

@@ -13,11 +13,13 @@
 #include "../include/mxd_crypto.h"
 #include "../include/mxd_endian.h"
 #include "../include/mxd_domain_tags.h"
+#include "../include/mxd_protocol_version.h"
 #include <string.h>
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <arpa/inet.h>
+#include <pthread.h>
 #include "../include/mxd_error.h"
 
 #define MXD_VALIDATION_EXPIRY_BLOCKS 5
@@ -184,16 +186,6 @@ void mxd_handle_blocks_response(const uint8_t *data, size_t data_len, uint32_t b
             }
         }
 
-        // For non-genesis blocks, verify validation chain integrity if signatures present
-        // Note: unsolicited blocks (new proposals) arrive with only the proposer's signature.
-        // We do NOT require min_signatures here — that check is for synced historical blocks.
-        // Validators will add their signatures during the consensus validation process.
-        if (block.height > 0 && block.validation_count > 0) {
-            if (mxd_verify_validation_chain_integrity(&block) != 0) {
-                MXD_LOG_WARN("sync", "Validation chain integrity imperfect for block at height %u (accepted)", block.height);
-            }
-        }
-
         // Check if we already have this block
         uint32_t current_height = 0;
         int have_blockchain = (mxd_get_blockchain_height(&current_height) == 0);
@@ -280,6 +272,35 @@ void mxd_handle_blocks_response(const uint8_t *data, size_t data_len, uint32_t b
             return;
         }
         
+        // Verify validation-chain integrity (advisory) — only for the new block we
+        // are about to store. We reach here only after the duplicate / divergent-fork
+        // / ahead branches above have early-returned, i.e. height == current_height.
+        // Running this earlier re-checked every re-gossiped tip on an idle chain:
+        // a known-duplicate block (dropped at the hash check above) tripped a
+        // structural invariant and spammed ~1 WARN/min/node indefinitely. The check
+        // is non-enforcing here (WARN only); the real gates are the block-hash match
+        // (above), bridge-tx validation, hash-dedup, and fork-choice in mxd_store_block.
+        // Note: unsolicited blocks may arrive with only the proposer's signature;
+        // validators add theirs during consensus, so an imperfect chain is accepted.
+        if (block.height > 0 && block.validation_count > 0) {
+            if (mxd_verify_validation_chain_integrity(&block) != 0) {
+                MXD_LOG_WARN("sync", "Validation chain integrity imperfect for block at height %u (accepted)", block.height);
+            }
+        }
+
+        // SECURITY (consensus-ingest fix): authenticate block-embedded validator
+        // JOIN/EVICT entries BEFORE any state mutation. These entries are not
+        // covered by the block hash, so a peer can append forged ones to an
+        // otherwise-valid block; without this gate mxd_apply_*_deltas below would
+        // inject Sybil validators / evict honest ones with no signature check.
+        // Reject the whole block on any failure (do NOT touch UTXO set or table).
+        if (mxd_verify_block_validator_entries(&block) != 0) {
+            MXD_LOG_ERROR("sync", "Unsolicited block at height %u has unauthenticated validator-management entries - REJECTING",
+                          block.height);
+            mxd_free_block(&block);
+            return;
+        }
+
         // Apply transactions to create UTXOs (critical for genesis block)
         int64_t supply_delta = 0;
         int apply_result = mxd_apply_block_transactions(&block, &supply_delta);
@@ -784,6 +805,61 @@ int mxd_apply_block_transactions(const mxd_block_t *block, int64_t *supply_delta
             delta -= (int64_t)tx.voluntary_tip;
         }
 
+        // SECURITY (3.4): verify v2 input signatures + UTXO ownership before
+        // applying. This path runs on synced/gossiped blocks; signatures were
+        // previously checked ONLY at local HTTP submission, so a malicious
+        // proposer could spend UTXOs it does not own — mxd_mark_utxo_spent_to_batch
+        // checks existence + is_spent, NOT ownership. The checks below are
+        // deterministic (a pure function of the tx bytes and the spent UTXO's
+        // on-chain owner/amount), so every node reaches the same decision.
+        //
+        // Replay-safe: when this block is re-applied during resync the inputs
+        // are already spent, so the UTXO-dependent checks would fail spuriously.
+        // We run them ONLY on first application (first input still unspent) and
+        // let the existing idempotent "already applied" skip below handle replays.
+        if (!tx.is_coinbase && tx.input_count > 0) {
+            mxd_utxo_t probe;
+            int first_apply = (mxd_get_utxo(tx.inputs[0].prev_tx_hash,
+                                            tx.inputs[0].output_index, &probe) == 0
+                               && !probe.is_spent);
+            if (first_apply) {
+                int invalid = 0;
+                // Duplicate-input guard: prevents counting one UTXO twice.
+                for (uint32_t a = 0; a < tx.input_count && !invalid; a++) {
+                    for (uint32_t b = a + 1; b < tx.input_count; b++) {
+                        if (tx.inputs[a].output_index == tx.inputs[b].output_index &&
+                            memcmp(tx.inputs[a].prev_tx_hash, tx.inputs[b].prev_tx_hash, 64) == 0) {
+                            invalid = 1; break;
+                        }
+                    }
+                }
+                // Per-input signature (proves the spender authorized the spend).
+                for (uint32_t a = 0; a < tx.input_count && !invalid; a++) {
+                    if (mxd_verify_tx_input(&tx, a) != 0) invalid = 1;
+                }
+                // UTXO existence + ownership (owner == derive(input pubkey)) and
+                // amount population from the authoritative on-chain UTXO.
+                if (!invalid && mxd_validate_transaction_inputs(&tx) != 0) invalid = 1;
+                // Conservation: outputs + tip must not exceed inputs.
+                if (!invalid) {
+                    mxd_amount_t tot_in = 0, tot_out = 0;
+                    for (uint32_t a = 0; a < tx.input_count; a++) tot_in += tx.inputs[a].amount;
+                    for (uint32_t a = 0; a < tx.output_count; a++) tot_out += tx.outputs[a].amount;
+                    if (tot_out + tx.voluntary_tip > tot_in) invalid = 1;
+                }
+                if (invalid) {
+                    // Reuse MXD_ERR_BRIDGE_INVALID: it is the "block contains an
+                    // invalid tx — reject the whole block" signal both ingest
+                    // callers key on (other non-zero returns mean store-anyway).
+                    MXD_LOG_ERROR("sync", "INVALID v2 transaction %u (signature/ownership/amount) - REJECTING BLOCK at height %u",
+                                  i, block->height);
+                    mxd_free_transaction(&tx);
+                    if (supply_delta) *supply_delta = delta;
+                    return MXD_ERR_BRIDGE_INVALID;
+                }
+            }
+        }
+
         // Apply the transaction to UTXO state
         // Distinguish IO errors (must halt) from spent inputs (skip)
         int ret = mxd_apply_transaction_to_utxo(&tx);
@@ -862,7 +938,24 @@ static int mxd_sync_block_range(uint32_t start_height, uint32_t end_height) {
         // score state, so validation always fails with "score mismatch".
         // However, we MUST verify block hash integrity and validation chain
         // to prevent malicious peers from feeding fabricated blocks.
-        if (block->version < 1 || block->version > 5) {
+        //
+        // CONSENSUS FIX (v8-deep-sync gap): the upper bound was 5, which made
+        // bulk-sync REJECT every v6/v7/v8 block ("Invalid block version").
+        // On a chain past v8 activation (all recent blocks are v8) this means a
+        // node that falls behind — e.g. after losing a transient proposer race —
+        // can NEVER catch up via bulk range-sync and is permanently wedged on a
+        // minority fork. Observed: testnet split overnight when tn1/tn3/tn4 lost
+        // a race at h=526 and then could not sync the majority's v8 chain. The
+        // downstream checks below (block-hash integrity, validation-chain,
+        // mxd_verify_block_validator_entries, tx apply) are all version-agnostic
+        // and already handle v8, so accepting current-version blocks here is safe.
+        //
+        // HARDENING (version-agnostic cap): bound by MXD_CURRENT_PROTOCOL_VERSION
+        // rather than a literal. A literal (was 5, then 8) silently re-creates
+        // this exact permanent-wedge bug at the NEXT protocol bump (v9 blocks
+        // would be rejected by bulk-sync). Tying the cap to the protocol header
+        // makes it auto-track every future version.
+        if (block->version < 1 || block->version > MXD_CURRENT_PROTOCOL_VERSION) {
             MXD_LOG_WARN("sync", "Invalid block version %u at height %u, skipping", block->version, h);
             for (size_t bi = 0; bi < block_count; bi++) mxd_free_block(&blocks[bi]);
             free(blocks);
@@ -896,6 +989,17 @@ static int mxd_sync_block_range(uint32_t start_height, uint32_t end_height) {
                 // Strict enforcement only for newly proposed blocks (in mxd_process_validation_chain).
                 MXD_LOG_WARN("sync", "Validation chain integrity imperfect for synced block at height %u (accepted)", h);
             }
+        }
+
+        // SECURITY (consensus-ingest fix): authenticate block-embedded validator
+        // JOIN/EVICT entries before storing/applying. Same rationale as the
+        // unsolicited path — entries are outside the block hash, so a malicious
+        // bulk-sync peer could serve forged ones. Reject this block on failure.
+        if (mxd_verify_block_validator_entries(block) != 0) {
+            MXD_LOG_ERROR("sync", "Synced block at height %u has unauthenticated validator-management entries - REJECTING", h);
+            for (size_t bi = 0; bi < block_count; bi++) mxd_free_block(&blocks[bi]);
+            free(blocks);
+            continue;
         }
 
         int64_t supply_delta = 0;
@@ -1053,19 +1157,141 @@ int mxd_request_validation_chain_from_peers(const uint8_t block_hash[64]) {
     return success ? 0 : -1;
 }
 
-// Walk back `lookback` recent stored blocks. For any whose validation_count
-// is below the rapid-table 2/3 quorum threshold, ask all connected peers
-// for their full validation chain so the local copy can catch up. This
-// converges divergent per-node validation_count views back to the network
-// majority (gossip drops, peer restarts, or hung HTTP windows can otherwise
-// leave a node permanently below quorum on a block the rest of the network
-// has finalized).
-void mxd_reconcile_validation_chains(uint32_t lookback) {
+// ---------------------------------------------------------------------------
+// Validation-chain reconciliation (catch-up of validator signatures).
+//
+// Every ~30 s the consensus thread asks peers for the validation chain of any
+// recent block whose local copy is below quorum, so divergent per-node
+// validation_count views converge on the network majority (gossip drops, peer
+// restarts, hung HTTP windows).
+//
+// Without a backoff this was a permanent loop on mainnet (2026-10/11): blocks
+// produced while a validator in the signing order was offline (identity
+// rotation, rolling restart) never collected a quorum on ANY node — the
+// sequential chain cannot skip a position — so every node re-asked every peer
+// every cycle, every peer answered with the same short chain (or a divergent
+// one from a competing proposal sharing the hash), every answer was rejected
+// and logged: ~25k log lines/hour/node of useless traffic, forever.
+//
+// Rules now: each (height, hash) is requested immediately when first seen
+// below quorum, then with exponential backoff (1, 2, 4 … minutes, capped at
+// MXD_RECONCILE_MAX_BACKOFF_MS) so convergence stays eventual while the idle
+// cost is bounded; the slot resets when the hash at that height changes
+// (reorg) or the block reaches quorum. Selection is separated from sending so
+// it can be unit-tested without peers (tests/test_validation_reconcile.c).
+// ---------------------------------------------------------------------------
+
+#define RECONCILE_SLOTS 64
+
+typedef struct {
+    int      in_use;
+    uint32_t height;
+    uint8_t  block_hash[64];
+    uint32_t attempts;      // requests already sent for this (height, hash)
+    uint64_t next_due_ms;   // earliest time for the next request
+} reconcile_slot_t;
+
+static reconcile_slot_t g_reconcile_slots[RECONCILE_SLOTS];
+static pthread_mutex_t g_reconcile_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+void mxd_reconcile_reset_state(void) {
+    pthread_mutex_lock(&g_reconcile_mutex);
+    memset(g_reconcile_slots, 0, sizeof(g_reconcile_slots));
+    pthread_mutex_unlock(&g_reconcile_mutex);
+}
+
+// Delay before request number (attempts_done + 1): 0 for the first request,
+// then BASE * 2^(attempts_done - 1), capped.
+static uint64_t reconcile_backoff_ms(uint32_t attempts_done) {
+    if (attempts_done == 0) return 0;
+    uint64_t ms = MXD_RECONCILE_BASE_BACKOFF_MS;
+    for (uint32_t i = 1; i < attempts_done && ms < MXD_RECONCILE_MAX_BACKOFF_MS; i++) {
+        ms *= 2;
+    }
+    return ms > MXD_RECONCILE_MAX_BACKOFF_MS ? MXD_RECONCILE_MAX_BACKOFF_MS : ms;
+}
+
+// Slot for `height`; reset if the hash at that height changed (reorg). When
+// all slots are busy the lowest height is recycled. Caller holds the mutex.
+static reconcile_slot_t *reconcile_slot_for(uint32_t height, const uint8_t hash[64]) {
+    reconcile_slot_t *free_slot = NULL;
+    reconcile_slot_t *lowest = NULL;
+    for (int i = 0; i < RECONCILE_SLOTS; i++) {
+        reconcile_slot_t *s = &g_reconcile_slots[i];
+        if (!s->in_use) {
+            if (!free_slot) free_slot = s;
+            continue;
+        }
+        if (s->height == height) {
+            if (memcmp(s->block_hash, hash, 64) != 0) {
+                memset(s, 0, sizeof(*s));
+                s->in_use = 1;
+                s->height = height;
+                memcpy(s->block_hash, hash, 64);
+            }
+            return s;
+        }
+        if (!lowest || s->height < lowest->height) lowest = s;
+    }
+    reconcile_slot_t *s = free_slot ? free_slot : lowest;
+    memset(s, 0, sizeof(*s));
+    s->in_use = 1;
+    s->height = height;
+    memcpy(s->block_hash, hash, 64);
+    return s;
+}
+
+static void reconcile_forget_height(uint32_t height) {
+    for (int i = 0; i < RECONCILE_SLOTS; i++) {
+        if (g_reconcile_slots[i].in_use && g_reconcile_slots[i].height == height) {
+            g_reconcile_slots[i].in_use = 0;
+        }
+    }
+}
+
+uint32_t mxd_reconcile_select_blocks(uint32_t lookback, uint32_t quorum, uint64_t now_ms,
+                                     uint32_t *out_heights, uint8_t (*out_hashes)[64],
+                                     uint32_t max) {
+    if (!out_heights || !out_hashes || max == 0 || lookback == 0) return 0;
+
     uint32_t current_height = 0;
     if (mxd_get_blockchain_height(&current_height) != 0 || current_height == 0) {
-        return;
+        return 0;
     }
+    if (quorum < 1) quorum = 1;
 
+    // current_height is a count (tip = current_height - 1); the loop simply
+    // skips heights that are not stored.
+    uint32_t start = (current_height >= lookback) ? (current_height - lookback + 1) : 1;
+    uint32_t selected = 0;
+
+    pthread_mutex_lock(&g_reconcile_mutex);
+    for (uint32_t h = current_height; h >= start && selected < max; h--) {
+        mxd_block_t block;
+        memset(&block, 0, sizeof(block));
+        if (mxd_get_block_by_height(h, &block) != 0) {
+            continue;
+        }
+        if (block.validation_count >= quorum) {
+            reconcile_forget_height(h);
+        } else {
+            reconcile_slot_t *s = reconcile_slot_for(h, block.block_hash);
+            if (now_ms >= s->next_due_ms) {
+                out_heights[selected] = h;
+                memcpy(out_hashes[selected], block.block_hash, 64);
+                selected++;
+                s->attempts++;
+                s->next_due_ms = now_ms + reconcile_backoff_ms(s->attempts);
+            }
+        }
+        mxd_free_block(&block);
+    }
+    pthread_mutex_unlock(&g_reconcile_mutex);
+
+    return selected;
+}
+
+void mxd_reconcile_validation_chains(uint32_t lookback) {
     // Use the same threshold formula as mxd_block_has_quorum.
     mxd_peer_t rt_peers[MXD_MAX_PEERS];
     size_t rt_count = MXD_MAX_PEERS;
@@ -1073,78 +1299,115 @@ void mxd_reconcile_validation_chains(uint32_t lookback) {
     if (mxd_get_rapid_table_peers(rt_peers, &rt_count) == 0 && rt_count > 0) {
         quorum = (uint32_t)((rt_count * 2 + 2) / 3);
     } else {
+        rt_count = 0;
         quorum = 4;  // sensible default for the 5-validator mainnet
     }
-    if (quorum < 1) quorum = 1;
 
-    uint32_t start = (current_height >= lookback) ? (current_height - lookback + 1) : 1;
-    int requested = 0;
-    for (uint32_t h = start; h <= current_height; h++) {
-        mxd_block_t block;
-        memset(&block, 0, sizeof(block));
-        if (mxd_get_block_by_height(h, &block) != 0) {
-            continue;
-        }
-        if (block.validation_count < quorum) {
-            mxd_request_validation_chain_from_peers(block.block_hash);
-            requested++;
-        }
-        mxd_free_block(&block);
+    uint32_t heights[MXD_RECONCILE_MAX_PER_CYCLE];
+    uint8_t hashes[MXD_RECONCILE_MAX_PER_CYCLE][64];
+    uint32_t n = mxd_reconcile_select_blocks(lookback, quorum, mxd_now_ms(),
+                                             heights, hashes, MXD_RECONCILE_MAX_PER_CYCLE);
+    for (uint32_t i = 0; i < n; i++) {
+        mxd_request_validation_chain_from_peers(hashes[i]);
     }
 
-    if (requested > 0) {
-        MXD_LOG_INFO("sync", "Reconcile: requested validation chains for %d block(s) below quorum (%u/%zu)",
-                     requested, quorum, rt_count);
+    if (n > 0) {
+        MXD_LOG_INFO("sync", "Reconcile: requested validation chains for %u block(s) below quorum (%u/%zu), newest at height %u",
+                     n, quorum, rt_count, heights[0]);
     }
+}
+
+int mxd_validation_chain_extends_local(const mxd_block_t *local,
+                                       const mxd_validator_signature_t *sigs,
+                                       uint32_t count) {
+    if (!local || (count > 0 && !sigs)) return -1;
+    if (local->validation_count > 0 && !local->validation_chain) return -1;
+
+    uint32_t common = (count < local->validation_count) ? count : local->validation_count;
+    for (uint32_t i = 0; i < common; i++) {
+        const mxd_validator_signature_t *mine = &local->validation_chain[i];
+        const mxd_validator_signature_t *theirs = &sigs[i];
+        if (theirs->chain_position != i) return 0;
+        if (memcmp(mine->validator_id, theirs->validator_id, 32) != 0) return 0;
+        if (mine->signature_length != theirs->signature_length ||
+            memcmp(mine->signature, theirs->signature, mine->signature_length) != 0) {
+            return 0;
+        }
+    }
+    for (uint32_t i = common; i < count; i++) {
+        if (sigs[i].chain_position != i) return 0;
+    }
+    return 1;
 }
 
 int mxd_process_incoming_validation_chain(const uint8_t block_hash[64],
                                          const mxd_validator_signature_t *signatures,
                                          uint32_t signature_count) {
     if (!block_hash || !signatures || signature_count == 0) return -1;
-    
+
     mxd_block_t block;
+    memset(&block, 0, sizeof(block));
     if (mxd_retrieve_block_by_hash(block_hash, &block) != 0) {
-        MXD_LOG_ERROR("sync", "Failed to retrieve block for validation chain processing");
+        MXD_LOG_DEBUG("sync", "Validation chain received for a block we do not have; ignoring");
         return -1;
     }
-    
-    // Process incoming sigs in chain_position order. The peer's chain may
-    // include sigs at positions we already filled (skip those), and the
-    // sequential add path requires processing them in order so each sig's
-    // expected position equals our current validation_count after the
-    // prior add. skip_drift_check=1 because sigs may be hours old
-    // (catchup of an older block); cryptographic verify still gates them.
+
+    // Nothing to learn from a chain no longer than ours.
+    if (signature_count <= block.validation_count) {
+        mxd_free_block(&block);
+        return 0;
+    }
+
+    // A chain whose prefix differs from ours is another view of the same
+    // height (a competing proposal with the same hash — the hash does not bind
+    // the proposer — or a peer that accepted signatures in another order).
+    // Chain hashes are sequential, so its signatures can never verify on top
+    // of our copy: do not try. Every attempt failed the position/crypto check
+    // and logged an error — that was the mainnet log storm.
+    if (mxd_validation_chain_extends_local(&block, signatures, signature_count) != 1) {
+        MXD_LOG_DEBUG("sync", "Validation chain for block %u diverges from the local copy (%u sigs vs %u); ignoring",
+                      block.height, signature_count, block.validation_count);
+        mxd_free_block(&block);
+        return 0;
+    }
+
+    // Append only the positions we are missing, in order. Stop at the first
+    // failure: later positions cannot verify without it. skip_drift_check=1
+    // because sigs may be hours old (catch-up of an older block); the
+    // cryptographic verification still gates them.
     int added = 0;
-    for (uint32_t i = 0; i < signature_count; i++) {
+    for (uint32_t i = block.validation_count; i < signature_count; i++) {
         if (mxd_verify_and_add_validation_signature(&block,
                                                   signatures[i].validator_id,
                                                   signatures[i].algo_id,
                                                   signatures[i].signature,
                                                   signatures[i].signature_length,
                                                   signatures[i].timestamp,
-                                                  /* skip_drift_check */ 1) == 0) {
-            added++;
+                                                  /* skip_drift_check */ 1) != 0) {
+            break;
         }
+        added++;
     }
 
-    if (added > 0) {
-        if (mxd_store_block(&block) != 0) {
-            MXD_LOG_ERROR("sync", "Failed to store block with updated validation chain");
-            mxd_free_block(&block);
-            return -1;
-        }
-        MXD_LOG_INFO("sync", "Catchup added %d sigs to block %u (total now %u)",
-                     added, block.height, block.validation_count);
+    if (added == 0) {
+        mxd_free_block(&block);
+        return 0;
     }
 
+    if (mxd_store_block(&block) != 0) {
+        MXD_LOG_ERROR("sync", "Failed to store block with updated validation chain");
+        mxd_free_block(&block);
+        return -1;
+    }
+    MXD_LOG_INFO("sync", "Catchup added %d sigs to block %u (total now %u)",
+                 added, block.height, block.validation_count);
     mxd_free_block(&block);
 
     if (mxd_check_block_relay_status(block_hash) == 1) {
-        MXD_LOG_INFO("sync", "Block has enough signatures for relay");
+        MXD_LOG_DEBUG("sync", "Block has enough signatures for relay");
     }
 
-    return 0;
+    return 1;
 }
 
 int mxd_verify_and_add_validation_signature(mxd_block_t *block,
@@ -1473,19 +1736,61 @@ int mxd_sign_and_broadcast_block(const mxd_block_t *block) {
         }
     }
 
-    // Determine our signing position in the sequential chain
+    // Determine our signing position in the sequential chain. For a block
+    // below the stored tip (re-examined on validation-chain catch-up) these
+    // outcomes are routine and logged at DEBUG only; at the tip they still
+    // deserve attention.
+    int historical = (block->height + 1 < local_height);
     int my_position = mxd_get_my_signing_position(table, block->proposer_id, local_address, block->height);
     if (my_position < 0) {
-        MXD_LOG_WARN("sync", "Not in signing order for block %u", block->height);
+        if (historical) {
+            MXD_LOG_DEBUG("sync", "Not in signing order for block %u", block->height);
+        } else {
+            MXD_LOG_WARN("sync", "Not in signing order for block %u", block->height);
+        }
         return 0;
     }
 
     // Check if it's our turn: we need all preceding signatures present
     if ((uint32_t)my_position != block->validation_count) {
         // Not our turn yet - need more preceding signatures
-        MXD_LOG_INFO("sync", "Not our turn yet for block %u (my_position=%d, validation_count=%u)",
-                     block->height, my_position, block->validation_count);
+        if (historical) {
+            MXD_LOG_DEBUG("sync", "Not our turn yet for block %u (my_position=%d, validation_count=%u)",
+                          block->height, my_position, block->validation_count);
+        } else {
+            MXD_LOG_INFO("sync", "Not our turn yet for block %u (my_position=%d, validation_count=%u)",
+                         block->height, my_position, block->validation_count);
+        }
         return 0;
+    }
+
+    // RISK-1 (A): per-height equivocation lock. We have passed all the "should
+    // I sign" checks and are about to cast our vote — atomically commit this
+    // height to this block's hash first. If we have ALREADY signed a DIFFERENT
+    // block at this height (e.g. we signed a competing block that later lost
+    // fork-choice and was reorged out), REFUSE: a second vote at H would let two
+    // competing blocks each reach quorum and both finalize (conflicting state /
+    // double-spend). Following/adopting the canonical block is unaffected — we
+    // simply never cast a second vote at H. The vote book is persistent and is
+    // never cleared by reorg, so the guarantee holds across reorg and restart.
+    // Fail-closed on storage error. See
+    // DESIGN_consensus_safe_by_construction_2026-06-22.md (RISK-1 A).
+    {
+        int vb = mxd_votebook_claim(block->height, block->block_hash);
+        if (vb != 0) {
+            if (vb > 0) {
+                char got[17] = {0};
+                for (int j = 0; j < 8; j++) snprintf(got + j*2, 3, "%02x", block->block_hash[j]);
+                MXD_LOG_WARN("sync",
+                             "Equivocation prevented: already voted a different block at height %u; refusing to sign %s..",
+                             block->height, got);
+            } else {
+                MXD_LOG_ERROR("sync",
+                              "Vote-book unavailable at height %u; refusing to sign (fail-closed)",
+                              block->height);
+            }
+            return 0;
+        }
     }
 
     // Compute chain_hash for our position

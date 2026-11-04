@@ -109,6 +109,7 @@ Configuration is via a JSON file. Key fields: `node_id`, `network_type`, `port`,
 | Testnet | `0x4D580002` | Public fleet offline. Run your own nodes with the testnet configuration if you need one. |
 
 The node takes its chain id from the `MXD_CHAIN_ID` environment variable (`mainnet` by default, `testnet` for a testnet node).
+`MXD_LOG_LEVEL` (`error`, `warn`, `info`, `debug`; default `info`) sets the log level. When stdout is not a terminal (systemd/journald) the node logs one status line a minute instead of the full-screen metrics dashboard; set `MXD_DASHBOARD=1` to force the dashboard.
 
 ## API Endpoints (summary)
 

@@ -114,7 +114,7 @@ int mxd_add_validator_signature(mxd_block_t *block, const uint8_t validator_id[3
     return 0;
 }
 
-int mxd_verify_validation_chain(const mxd_block_t *block) {
+static int verify_validation_chain_impl(const mxd_block_t *block, int check_timestamp) {
     if (!block || !block->validation_chain || block->validation_count == 0) {
         return -1;
     }
@@ -126,19 +126,28 @@ int mxd_verify_validation_chain(const mxd_block_t *block) {
             return -1;
         }
 
-        uint64_t now = mxd_now_ms() / 1000; // NTP-synchronized time in seconds
-        if (sig_i->timestamp > now + 60 || sig_i->timestamp + 60 < now) {
-            // F7-3: log the actual delta so operators can diagnose clock drift
-            // from the journal without re-running the validator under a debugger.
-            int64_t delta = (int64_t)sig_i->timestamp - (int64_t)now;
-            MXD_LOG_WARN("validation",
-                         "Validation chain[%u] timestamp out of ±60s window: "
-                         "sig.timestamp=%llu now=%llu delta=%lld s (likely clock drift; check NTP)",
-                         i,
-                         (unsigned long long)sig_i->timestamp,
-                         (unsigned long long)now,
-                         (long long)delta);
-            return -1;
+        // SECURITY (3.2): the ±60s signature-liveness window is enforced ONLY on
+        // the live-admission path (mxd_verify_validation_chain). The
+        // fork-choice / historical-ingest path uses
+        // mxd_verify_validation_chain_crypto (check_timestamp=0), so genuine old
+        // or NTP-drifted blocks are verified on cryptographic validity alone and
+        // are not spuriously rejected — which is what previously forced callers
+        // to downgrade enforcement to a WARN.
+        if (check_timestamp) {
+            uint64_t now = mxd_now_ms() / 1000; // NTP-synchronized time in seconds
+            if (sig_i->timestamp > now + 60 || sig_i->timestamp + 60 < now) {
+                // F7-3: log the actual delta so operators can diagnose clock drift
+                // from the journal without re-running the validator under a debugger.
+                int64_t delta = (int64_t)sig_i->timestamp - (int64_t)now;
+                MXD_LOG_WARN("validation",
+                             "Validation chain[%u] timestamp out of ±60s window: "
+                             "sig.timestamp=%llu now=%llu delta=%lld s (likely clock drift; check NTP)",
+                             i,
+                             (unsigned long long)sig_i->timestamp,
+                             (unsigned long long)now,
+                             (long long)delta);
+                return -1;
+            }
         }
 
         for (uint32_t j = i + 1; j < block->validation_count; j++) {
@@ -184,6 +193,23 @@ int mxd_verify_validation_chain(const mxd_block_t *block) {
     }
 
     return 0;
+}
+
+int mxd_verify_validation_chain(const mxd_block_t *block) {
+    /* Live-admission verification: cryptographic validity PLUS the ±60s
+     * signature-liveness window. Use when admitting in-flight signatures on the
+     * current tip (rejects far-future/stale clocks). */
+    return verify_validation_chain_impl(block, 1);
+}
+
+int mxd_verify_validation_chain_crypto(const mxd_block_t *block) {
+    /* SECURITY (3.2): timestamp-INDEPENDENT cryptographic verification of the
+     * entire validation chain. Every counted signature must verify against the
+     * signer's registered public key over the v7 canonical message. Used as a
+     * HARD gate before fork-choice/reorg so a peer cannot win a reorg with a
+     * forged high validation_count, without the ±60s window spuriously rejecting
+     * honest historical / NTP-drifted blocks. */
+    return verify_validation_chain_impl(block, 0);
 }
 
 int mxd_block_has_quorum(const mxd_block_t *block) {

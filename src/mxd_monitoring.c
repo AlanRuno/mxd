@@ -20,6 +20,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <sys/time.h>       /* struct timeval for SO_RCVTIMEO/SO_SNDTIMEO */
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
@@ -157,6 +158,31 @@ static int check_bearer_token(const char* auth_header) {
         return 0;
     }
     
+    return 1;
+}
+
+// Admin-only WRITE routes (POST /bridge/authorize) must present a Bearer token equal to
+// http.api_token REGARDLESS of http.require_auth, which only governs the read-only and
+// wallet surface. Fails closed when no token is configured: a default configuration must
+// never expose an unauthenticated write path. (2026-09-29: the route previously relied on
+// a comment, not a check - reachable from the internet with require_auth=false.)
+static int check_admin_token(const char* auth_header) {
+    if (!global_config || global_config->http.api_token[0] == '\0') {
+        MXD_LOG_WARN("monitoring", "Admin route denied: no http.api_token configured");
+        mxd_metrics_increment("mxd_http_auth_failures_total");
+        return 0;
+    }
+    if (!auth_header || strncmp(auth_header, "Bearer ", 7) != 0) {
+        mxd_metrics_increment("mxd_http_auth_failures_total");
+        return 0;
+    }
+    const char* token = auth_header + 7;
+    size_t token_len = strlen(token);
+    if (token_len != strlen(global_config->http.api_token) ||
+        !constant_time_compare(token, global_config->http.api_token, token_len)) {
+        mxd_metrics_increment("mxd_http_auth_failures_total");
+        return 0;
+    }
     return 1;
 }
 
@@ -2456,11 +2482,19 @@ static void handle_http_request(int client_socket) {
         }
     } else if (strcmp(method, "POST") == 0) {
         if (strcmp(path, "/bridge/authorize") == 0) {
-            // Authorize a bridge contract hash (admin only, requires API token)
+            // Authorize a bridge contract hash. ADMIN ONLY: requires "Authorization: Bearer
+            // <http.api_token>" and fails closed when no token is configured (see
+            // check_admin_token). The sanctioned, replicated path is a quorum-signed
+            // AUTHORIZE_BRIDGE admin tx via POST /admin/submit; this route is a local
+            // break-glass helper only.
             // Body: {"contract_hash": "128 hex chars"}
             extern rocksdb_t* mxd_get_rocksdb_db(void);
             extern rocksdb_writeoptions_t* mxd_get_rocksdb_writeoptions(void);
-            if (body_copy[0] != '\0') {
+            if (!check_admin_token(auth_header)) {
+                MXD_LOG_WARN("monitoring", "Rejected unauthenticated POST /bridge/authorize");
+                response_body = "{\"error\":\"Unauthorized\"}";
+                status_code = 401;
+            } else if (body_copy[0] != '\0') {
                 cJSON *aj = cJSON_Parse(body_copy);
                 if (aj) {
                     cJSON *ch = cJSON_GetObjectItem(aj, "contract_hash");
@@ -2657,7 +2691,31 @@ static void* server_thread_func(void* arg) {
             }
             continue;
         }
-        
+
+        /* HARDENING (API-hang fix): this HTTP/metrics server is SINGLE-THREADED —
+         * handle_http_request() runs INLINE in the accept loop and does a
+         * BLOCKING recv() with no timeout. A single client that completes the TCP
+         * handshake but then stalls (half-open connection: dropped client, port
+         * scanner, a request that trickles/stops, or a health-check connection
+         * that wedges) blocks the sole server thread in recv() FOREVER, freezing
+         * the ENTIRE API — it keeps listen()ing (so it looks up) but serves no
+         * requests until process restart. This was the recurring "API hang" that
+         * silently degraded mainnet nodes over days and, because the bridge
+         * oracle health-checks a node's API, HALTED THE BRIDGE (2026-07-01).
+         *
+         * Bound every recv()/send() on the accepted socket with a timeout so no
+         * single connection can stall the accept loop indefinitely: a stalled
+         * recv() now returns EAGAIN/EWOULDBLOCK after the timeout, the handler
+         * closes the socket, and the loop moves on. Same remedy as the gossip-A
+         * SO_RCVTIMEO fix on the P2P sockets. (A per-connection thread pool would
+         * also allow concurrency, but is a larger change with shared-state
+         * thread-safety implications; the timeout alone eliminates the hang.) */
+        {
+            struct timeval io_timeout = { .tv_sec = 10, .tv_usec = 0 };
+            setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, &io_timeout, sizeof(io_timeout));
+            setsockopt(client_socket, SOL_SOCKET, SO_SNDTIMEO, &io_timeout, sizeof(io_timeout));
+        }
+
         handle_http_request(client_socket);
     }
     return NULL;

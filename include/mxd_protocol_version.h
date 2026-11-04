@@ -24,6 +24,15 @@ extern "C" {
  *       prefixed to validator/p2p/bridge/consensus signed payloads, P2P
  *       handshake protocol_version bumped 5->6. Wire-format-breaking;
  *       requires fresh genesis on all networks.
+ * - v10: PQ-only validator admission — a block-embedded JOIN (and the gossip
+ *        JOIN request behind it) is valid only for a Dilithium5 (ML-DSA-87)
+ *        identity. Existing members are untouched; genesis (h=0) is exempt.
+ *        Closes the MXD-PQ-00 "consensus gap" for new validators. Same wire format.
+ * - v9: committed-order hygiene — validators evicted on-chain are dropped
+ *       from the committed validator_scores inherited from the previous
+ *       block, so the proposer rotation and the validation-chain signing
+ *       order (both derived from those scores) no longer contain dead
+ *       slots. First v9 block replays v8 evictions once. Same wire format.
  * - v8: peer-driven validator EVICTION (Phase 3 of permissionless
  *       validator-management). Block layout gains a
  *       rapid_eviction_entries[] field; pre-v8 blocks ignore it.
@@ -40,8 +49,10 @@ extern "C" {
 #define MXD_PROTOCOL_VERSION_6 6
 #define MXD_PROTOCOL_VERSION_7 7
 #define MXD_PROTOCOL_VERSION_8 8
+#define MXD_PROTOCOL_VERSION_9 9
+#define MXD_PROTOCOL_VERSION_10 10
 
-#define MXD_CURRENT_PROTOCOL_VERSION MXD_PROTOCOL_VERSION_8
+#define MXD_CURRENT_PROTOCOL_VERSION MXD_PROTOCOL_VERSION_10
 
 // Activation heights for protocol upgrades
 // These define when new protocol versions become mandatory
@@ -53,6 +64,8 @@ typedef struct {
     uint32_t v6_activation_height;  // addr32 validator identity (block-format change)
     uint32_t v7_activation_height;  // Domain-tag cascade + SHA-512 chain_id (wire-format change)
     uint32_t v8_activation_height;  // Peer-driven EVICT block field (Phase 3 validator-mgmt)
+    uint32_t v9_activation_height;  // Evicted validators dropped from committed scores / proposer+signing order
+    uint32_t v10_activation_height; // Validator JOIN admitted only for Dilithium5 identities
 } mxd_activation_heights_t;
 
 // Network-specific activation heights
@@ -75,7 +88,7 @@ mxd_activation_heights_t mxd_get_activation_heights(mxd_network_type_t network);
  *
  * @param height Block height
  * @param network Network type
- * @return Required protocol version (1..8)
+ * @return Required protocol version (1..10)
  */
 uint32_t mxd_get_required_protocol_version(uint32_t height, mxd_network_type_t network);
 

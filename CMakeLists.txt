@@ -286,3 +286,7 @@ add_test(NAME enterprise_features_tests COMMAND mxd_enterprise_features_tests)
 # Test-vector generator tool (Phase 9 — MXD-NN spec compliance)
 add_executable(gen_test_vectors tools/gen_test_vectors.c)
 target_link_libraries(gen_test_vectors mxd mldsa ${OPENSSL_LIBRARIES} sodium)
+
+# Node identity keygen tool (offline node_keys.v2 generation, Dilithium5 by default)
+add_executable(mxd_keygen tools/mxd_keygen.c)
+target_link_libraries(mxd_keygen mxd mldsa ${OPENSSL_LIBRARIES} sodium)

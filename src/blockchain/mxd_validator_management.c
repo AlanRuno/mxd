@@ -1,4 +1,5 @@
 #include "../../include/mxd_validator_management.h"
+#include "../../include/mxd_protocol_version.h"
 #include "../../include/mxd_utxo.h"
 #include "../../include/mxd_address.h"
 #include "../../include/mxd_crypto.h"
@@ -260,10 +261,38 @@ int mxd_submit_validator_exit_request(const uint8_t *node_address,
     return 0;
 }
 
+
+/* v10 — PQ-only validator admission. A validator JOIN is admitted only when the
+ * joining identity is Dilithium5 (ML-DSA-87). Applies at every admission point
+ * (gossip receipt, proposer-side validation, block-embedded entry verification,
+ * and the node's own auto-join) from the v10 activation height of the network.
+ * The genesis block is exempt (founding membership). Existing members are never
+ * touched by this rule: an Ed25519 validator admitted before v10 stays until it
+ * leaves or is evicted; it simply cannot re-JOIN afterwards.
+ * Returns 1 if admitted, 0 if refused. */
+int mxd_join_algo_allowed_at(uint8_t algo_id, uint32_t height, mxd_network_type_t network) {
+    if (algo_id == MXD_SIGALG_DILITHIUM5) return 1;
+    if (height == 0) return 1;
+    if (mxd_get_required_protocol_version(height, network) >= MXD_PROTOCOL_VERSION_10) return 0;
+    return 1;
+}
+
 int mxd_validate_join_request(const mxd_validator_join_request_t *request,
                               mxd_amount_t total_supply) {
     if (!request) {
         return -1;
+    }
+
+    // 0. v10: only Dilithium5 identities may JOIN (the request would land in the next block).
+    {
+        extern int mxd_get_blockchain_height(uint32_t *height);
+        uint32_t next_height = 0;
+        if (mxd_get_blockchain_height(&next_height) == 0 &&
+            !mxd_join_algo_allowed_at(request->algo_id, next_height, mxd_get_network_type())) {
+            MXD_LOG_WARN("validator", "Join request rejected: algo_id %u not admitted at height %u (protocol v10 admits only Dilithium5 validators)",
+                         request->algo_id, next_height);
+            return -1;
+        }
     }
 
     // 1. Validate timestamp to prevent replay attacks (SECURITY: Issue #6)

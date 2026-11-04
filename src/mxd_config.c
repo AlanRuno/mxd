@@ -83,7 +83,7 @@ void mxd_set_default_config(mxd_config_t* config) {
     
     config->enable_upnp = 1;
     config->bootstrap_refresh_interval = 300;
-    config->preferred_sign_algo = 1;
+    config->preferred_sign_algo = 2;  // Dilithium5 (ML-DSA-87) for new identities; persisted keys win
     config->protocol_version = 3;
     
     strncpy(config->http.bind_address, "127.0.0.1", sizeof(config->http.bind_address) - 1);

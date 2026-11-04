@@ -1,5 +1,6 @@
 #include "mxd_logging.h"
 
+#include "../include/mxd_blockchain.h"
 #include "../include/mxd_blockchain_db.h"
 #include "../include/mxd_rocksdb_globals.h"
 #include "../include/blockchain/mxd_rsc.h"
@@ -28,6 +29,11 @@ static int handle_block_at_existing_height(const mxd_block_t *new_block);
 static int reorg_to_candidate(const mxd_block_t *candidate);
 
 static rocksdb_options_t *options = NULL;
+// Block cache and table options are owned here and released in mxd_close_blockchain_db()
+// (the table factory keeps its own reference; without an explicit destroy the handles leak
+// on every open, which LeakSanitizer flags in tests that reopen the DB).
+static rocksdb_cache_t *block_cache = NULL;
+static rocksdb_block_based_table_options_t *table_options = NULL;
 static char *db_path_global = NULL;
 
 static uint32_t current_height = 0;
@@ -677,9 +683,9 @@ int mxd_init_blockchain_db(const char *db_path) {
                  write_buffer_size / (1024*1024), max_write_buffer_number, block_cache_size / (1024*1024),
                  (write_buffer_size * max_write_buffer_number + block_cache_size) / (1024*1024));
     
-    rocksdb_cache_t *cache = rocksdb_cache_create_lru(block_cache_size);
-    rocksdb_block_based_table_options_t *table_options = rocksdb_block_based_options_create();
-    rocksdb_block_based_options_set_block_cache(table_options, cache);
+    block_cache = rocksdb_cache_create_lru(block_cache_size);
+    table_options = rocksdb_block_based_options_create();
+    rocksdb_block_based_options_set_block_cache(table_options, block_cache);
     rocksdb_options_set_block_based_table_factory(options, table_options);
     
     rocksdb_readoptions_set_verify_checksums(mxd_get_rocksdb_readoptions(), 1);
@@ -729,6 +735,14 @@ int mxd_close_blockchain_db(void) {
     mxd_set_rocksdb_db(NULL);
     
     rocksdb_options_destroy(options);
+    if (table_options) {
+        rocksdb_block_based_options_destroy(table_options);
+        table_options = NULL;
+    }
+    if (block_cache) {
+        rocksdb_cache_destroy(block_cache);
+        block_cache = NULL;
+    }
     rocksdb_readoptions_destroy(mxd_get_rocksdb_readoptions());
     rocksdb_writeoptions_destroy(mxd_get_rocksdb_writeoptions());
     options = NULL;
@@ -949,6 +963,22 @@ static int store_block_unconditional(const mxd_block_t *block) {
 int mxd_store_block(const mxd_block_t *block) {
     if (!block || !mxd_get_rocksdb_db()) return -1;
 
+    /* SECURITY (consensus-ingest fix): authoritative backstop. Every store path
+     * — new tip, idempotent re-store, AND the divergent-fork/reorg-candidate
+     * path (handle_block_at_existing_height) — flows through here, so no block
+     * carrying forged validator JOIN/EVICT entries is ever persisted, not even
+     * as a fork candidate that could later win fork-choice. The per-entry
+     * checks are deterministic (signature + address-derivation only), so a
+     * legitimately-proposed block always passes; only forged entries are
+     * rejected. Network call sites also gate earlier to avoid mutating the
+     * UTXO set before this point. */
+    if (mxd_verify_block_validator_entries(block) != 0) {
+        MXD_LOG_ERROR("fork_choice",
+                      "Refusing to store block h=%u with unauthenticated validator-management entries",
+                      block->height);
+        return -1;
+    }
+
     /* Genesis is special-cased: never reorg over it. */
     if (block->height == 0) {
         return store_block_unconditional(block);
@@ -1099,6 +1129,23 @@ static int handle_block_at_existing_height(const mxd_block_t *new_block) {
         return store_block_unconditional(new_block);
     }
 
+    /* SECURITY (3.2): a divergent block may only win fork-choice and trigger a
+     * reorg if its validation chain CRYPTOGRAPHICALLY verifies — every counted
+     * signature must be real. mxd_compare_forks ranks forks by validation_count
+     * alone, so without this gate a peer could win a reorg (and double-spend
+     * within MXD_MAX_REORG_DEPTH of the tip) merely by stuffing a high count of
+     * forged signatures. Use the timestamp-independent verifier so honest
+     * historical / NTP-drifted fork blocks are not spuriously rejected. Genesis
+     * (h=0) never reorgs (short-circuited in mxd_store_block), so this is a
+     * post-genesis path and the chain always carries validator signatures. */
+    if (mxd_verify_validation_chain_crypto(new_block) != 0) {
+        MXD_LOG_WARN("fork_choice",
+                     "Rejecting fork candidate at h=%u: validation chain failed cryptographic verification (claimed sigs=%u)",
+                     new_block->height, new_block->validation_count);
+        mxd_free_block(&existing);
+        return -1;
+    }
+
     int cmp = mxd_compare_forks(&existing, new_block);
     if (cmp <= 0) {
         /* Existing wins (cmp<0) or equal (cmp==0, same hash). Keep existing.
@@ -1189,11 +1236,52 @@ static int reorg_to_candidate(const mxd_block_t *candidate) {
     }
     uint32_t depth = current_head.height - anc_h;
     if (depth > MXD_MAX_REORG_DEPTH) {
-        MXD_LOG_ERROR("fork_choice",
-                      "Reorg too deep: depth=%u > MXD_MAX_REORG_DEPTH=%d. Refusing.",
-                      depth, MXD_MAX_REORG_DEPTH);
+        /* RISK-2 deep-fork recovery. The depth cap exists to stop a FABRICATED
+         * chain from forcing an expensive deep reorg (DoS). But a chain whose
+         * tip block is QUORUM-CERTIFIED — carries >= 2/3 of the committed
+         * validator set's signatures, every one cryptographically valid — is
+         * final by the protocol's own rules and CANNOT be fabricated without
+         * breaking the BFT assumption (forging 2/3 of validator sigs). Such a
+         * chain is safe to adopt at ANY depth, so trust is bounded by
+         * certification, not by depth.
+         *
+         * Quorum is computed from the candidate's OWN committed validator_scores
+         * (the set size that block was built against) — self-contained, and more
+         * correct than the local live table on a forked node. If we cannot
+         * establish certification, we fall back to the original refuse (DoS guard
+         * intact). With RISK-1 in force there is at most one quorum-certified
+         * block per height, so a certified divergent block is unambiguously the
+         * winner.
+         *
+         * Recovery = truncate our losing fork back to the common ancestor and let
+         * NORMAL forward sync re-fill the certified winning chain (the emptied
+         * heights are no longer occupied, so bulk-sync's skip-if-exists no longer
+         * wedges us). See DESIGN_consensus_safe_by_construction_2026-06-22.md. */
+        uint32_t n_val = candidate->validator_scores_count;
+        uint32_t required = (n_val > 0) ? ((n_val * 2 + 2) / 3) : 0;
+        int certified = (n_val > 0) &&
+                        (candidate->validation_count >= required) &&
+                        (mxd_verify_validation_chain_crypto(candidate) == 0);
+        if (!certified) {
+            MXD_LOG_ERROR("fork_choice",
+                          "Reorg too deep: depth=%u > MXD_MAX_REORG_DEPTH=%d and candidate at h=%u NOT quorum-certified (sigs=%u, need=%u over N=%u). Refusing.",
+                          depth, MXD_MAX_REORG_DEPTH, candidate->height,
+                          candidate->validation_count, required, n_val);
+            mxd_free_block(&current_head);
+            return -1;
+        }
+        MXD_LOG_WARN("fork_choice",
+                     "Deep-fork recovery: depth=%u exceeds cap but candidate at h=%u is QUORUM-CERTIFIED (sigs=%u/%u over N=%u); truncating to ancestor h=%u and resyncing the certified chain.",
+                     depth, candidate->height, candidate->validation_count, required, n_val, anc_h);
         mxd_free_block(&current_head);
-        return -1;
+        if (mxd_rollback_to_height(anc_h) != 0) {
+            MXD_LOG_ERROR("fork_choice", "Deep-fork recovery: rollback to ancestor h=%u FAILED", anc_h);
+            return -1;
+        }
+        /* Do NOT apply the candidate here. Heights anc_h+1.. are now empty and
+         * normal bulk-sync fetches the certified winning chain forward, in order,
+         * with full per-block verification on the standard ingest path. */
+        return 0;
     }
 
     MXD_LOG_WARN("fork_choice", "Reorg: common ancestor h=%u, demoting %u block(s).",
@@ -1415,6 +1503,117 @@ static int reorg_to_candidate(const mxd_block_t *candidate) {
         MXD_LOG_ERROR("fork_choice", "Reorg: failed to store new head at h=%u", candidate->height);
     }
     return rc;
+}
+
+/* RISK-2: roll the canonical chain back to `target_height`, demoting every block
+ * above it — reverse each block's UTXO delta, re-pool its user (v2 non-coinbase)
+ * txs, and delete its height key — then set current_height = target_height + 1.
+ * Heights 0..target_height stay canonical; the emptied heights above are then
+ * re-filled by NORMAL forward sync (they are no longer occupied, so bulk-sync's
+ * skip-if-exists no longer blocks them). This is the escape hatch for a node
+ * stuck on a losing minority fork deeper than MXD_MAX_REORG_DEPTH: the caller
+ * (deep-fork recovery in reorg_to_candidate) only invokes it once the competing
+ * chain is known QUORUM-CERTIFIED, so trust is bounded by certification, not by
+ * depth. Mirrors the proven reorg Phase-1/2 demotion logic exactly.
+ * Returns 0 on success (incl. no-op), -1 on error.
+ * NOTE: not a single write-batch (matches the existing reorg path); a crash
+ * mid-rollback leaves an intermediate state that re-syncs on restart. Making
+ * both this and reorg_to_candidate transactional is a deferred hardening item.
+ * See DESIGN_consensus_safe_by_construction_2026-06-22.md (RISK-2). */
+int mxd_rollback_to_height(uint32_t target_height) {
+    if (!mxd_get_rocksdb_db()) return -1;
+
+    uint32_t my_height = 0;
+    if (mxd_get_blockchain_height(&my_height) != 0) return -1;
+    if (my_height == 0) return 0;                 /* nothing stored */
+    uint32_t my_tip = my_height - 1;
+    if (target_height >= my_tip) return 0;        /* already at/below target */
+
+    mxd_block_t head;
+    memset(&head, 0, sizeof(head));
+    if (mxd_retrieve_block_by_height(my_tip, &head) != 0) {
+        MXD_LOG_ERROR("fork_choice", "Rollback: cannot read tip at h=%u", my_tip);
+        return -1;
+    }
+    uint8_t walk_hash[64];
+    memcpy(walk_hash, head.block_hash, 64);
+    mxd_free_block(&head);
+
+    uint32_t h = my_tip;
+    while (h > target_height) {
+        mxd_block_t blk;
+        memset(&blk, 0, sizeof(blk));
+        if (mxd_retrieve_block_by_hash(walk_hash, &blk) != 0 &&
+            mxd_retrieve_block_by_height(h, &blk) != 0) {
+            MXD_LOG_ERROR("fork_choice", "Rollback: cannot read block at h=%u", h);
+            return -1;
+        }
+
+        /* Re-pool user txs (v2 non-coinbase); skip v3 admin/bridge + coinbase. */
+        for (uint32_t i = 0; i < blk.transaction_count; i++) {
+            const uint8_t *p = blk.transactions[i].data;
+            size_t plen = blk.transactions[i].length;
+            if (!p || plen < 4) continue;
+            uint32_t version = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+                               ((uint32_t)p[2] << 8)  | (uint32_t)p[3];
+            if (version == 3) continue;
+            mxd_transaction_t tx;
+            memset(&tx, 0, sizeof(tx));
+            if (mxd_deserialize_transaction(p, plen, &tx) != 0) continue;
+            if (!tx.is_coinbase) mxd_add_to_mempool(&tx, MXD_PRIORITY_MEDIUM);
+            mxd_free_transaction(&tx);
+        }
+
+        /* Reverse UTXO state for this block. */
+        mxd_block_delta_t delta;
+        mxd_block_delta_init(&delta);
+        if (mxd_load_block_delta(blk.block_hash, &delta) == 0) {
+            if (mxd_reverse_utxo_delta(&delta) != 0) {
+                MXD_LOG_ERROR("fork_choice", "Rollback: reverse_utxo_delta failed at h=%u", h);
+            }
+            mxd_delete_block_delta(blk.block_hash);
+        } else {
+            MXD_LOG_WARN("fork_choice",
+                         "Rollback: no delta for demoted block h=%u — UTXO state may diverge", h);
+        }
+        mxd_block_delta_free(&delta);
+
+        /* Delete the height key (hash key stays for lookup/alternates). */
+        uint8_t height_key[13 + sizeof(uint32_t)];
+        size_t height_key_len;
+        create_block_height_key(h, height_key, &height_key_len);
+        char *err = NULL;
+        rocksdb_delete(mxd_get_rocksdb_db(), mxd_get_rocksdb_writeoptions(),
+                       (char *)height_key, height_key_len, &err);
+        if (err) {
+            MXD_LOG_WARN("fork_choice", "Rollback: failed to delete height key h=%u: %s", h, err);
+            free(err);
+        }
+
+        uint8_t prev_hash[64];
+        memcpy(prev_hash, blk.prev_block_hash, 64);
+        mxd_free_block(&blk);
+        memcpy(walk_hash, prev_hash, 64);
+        if (h == 0) break;
+        h--;
+    }
+
+    /* Roll the canonical head pointer back to the target. */
+    pthread_mutex_lock(&height_mutex);
+    current_height = target_height + 1;  /* heights 0..target_height are valid */
+    uint32_t h_be = htonl(current_height);
+    char *err_rb = NULL;
+    rocksdb_put(mxd_get_rocksdb_db(), mxd_get_rocksdb_writeoptions(),
+                "current_height", 14, (char *)&h_be, sizeof(h_be), &err_rb);
+    if (err_rb) {
+        MXD_LOG_WARN("db", "Rollback: put current_height=%u failed: %s", current_height, err_rb);
+        free(err_rb);
+    }
+    pthread_mutex_unlock(&height_mutex);
+
+    MXD_LOG_WARN("fork_choice", "Rollback complete: truncated to h=%u (current_height=%u)",
+                 target_height, current_height);
+    return 0;
 }
 
 int mxd_retrieve_block_by_height(uint32_t height, mxd_block_t *block) {
@@ -2075,6 +2274,78 @@ int mxd_block_exists_at_height(uint32_t height) {
         free(value);
         return 1;
     }
+    return 0;
+}
+
+/* ===== RISK-1 (A): per-height equivocation vote book =====
+ * SAFETY: a validator must never contribute a signature to two DIFFERENT blocks
+ * at the same height. If it did, two competing blocks could each gather a 2/3
+ * quorum and both finalize → conflicting state / double-spend (quorums of size
+ * 2N/3 overlap in >=N/3 validators, so two conflicting blocks can only both
+ * finalize if some of that overlap equivocates). This persistent record commits
+ * each height to the single block hash this node has signed there.
+ *
+ * Two deliberate properties:
+ *   - NEVER cleared on reorg: once height H's vote is spent on a hash, it stays
+ *     spent, so a reorg that replaces H's block cannot induce a second vote at H.
+ *     (Adopting/following the new canonical block is separate from signing it,
+ *     so convergence is unaffected — we just don't cast a second vote.)
+ *   - Persisted in rocksdb: survives process restart.
+ * Key prefix "vote:height:". See DESIGN_consensus_safe_by_construction_2026-06-22.md.
+ *
+ * NOTE: pruning of old entries (below the last irreversibly-final height) is a
+ * deferred housekeeping item — entries are 64 bytes each, so even years of
+ * operation cost only a few hundred KB; not load-bearing for correctness. */
+static pthread_mutex_t votebook_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static void create_votebook_key(uint32_t height, uint8_t *key, size_t *key_len) {
+    mxd_create_key_with_u32(key, key_len, "vote:height:", height);
+}
+
+/* Atomically commit `height` to `block_hash` as this node's single vote there.
+ *   returns  0 : height is now (or was already) committed to block_hash — OK to sign
+ *   returns  1 : height is ALREADY committed to a DIFFERENT hash — equivocation, MUST NOT sign
+ *   returns -1 : storage error — fail-closed, caller MUST NOT sign
+ * The get-then-put is performed under votebook_mutex so the check-and-set is
+ * atomic against concurrent signing attempts for the same height. */
+int mxd_votebook_claim(uint32_t height, const uint8_t block_hash[64]) {
+    if (!block_hash || !mxd_get_rocksdb_db()) return -1;
+
+    uint8_t key[12 + sizeof(uint32_t)];   /* "vote:height:" = 12 chars */
+    size_t key_len = 0;
+    create_votebook_key(height, key, &key_len);
+
+    pthread_mutex_lock(&votebook_mutex);
+
+    size_t val_len = 0;
+    char *err = NULL;
+    char *existing = rocksdb_get(mxd_get_rocksdb_db(), mxd_get_rocksdb_readoptions(),
+                                 (char *)key, key_len, &val_len, &err);
+    if (err) {
+        MXD_LOG_ERROR("votebook", "rocksdb_get(vote:height:%u) failed: %s", height, err);
+        free(err);
+        if (existing) free(existing);
+        pthread_mutex_unlock(&votebook_mutex);
+        return -1;  /* fail-closed */
+    }
+
+    if (existing) {
+        int rc = (val_len == 64 && memcmp(existing, block_hash, 64) == 0) ? 0 : 1;
+        free(existing);
+        pthread_mutex_unlock(&votebook_mutex);
+        return rc;
+    }
+
+    /* No prior vote at this height — claim it for block_hash. */
+    rocksdb_put(mxd_get_rocksdb_db(), mxd_get_rocksdb_writeoptions(),
+                (char *)key, key_len, (const char *)block_hash, 64, &err);
+    if (err) {
+        MXD_LOG_ERROR("votebook", "rocksdb_put(vote:height:%u) failed: %s", height, err);
+        free(err);
+        pthread_mutex_unlock(&votebook_mutex);
+        return -1;  /* fail-closed */
+    }
+    pthread_mutex_unlock(&votebook_mutex);
     return 0;
 }
 

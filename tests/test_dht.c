@@ -46,5 +46,26 @@ int main(int argc, char** argv) {
     printf("Initialized k-bucket\n");
     fflush(stdout);
 
+    // Key-generation algorithm selector (used only when data/node_keys.v2 is absent).
+    // Default must be Dilithium5; setter accepts only 1 (Ed25519) or 2 (Dilithium5).
+    if (mxd_dht_get_keygen_algo() != 2) {
+        printf("FAIL: default keygen algo is %u, expected 2 (Dilithium5)\n", mxd_dht_get_keygen_algo());
+        return 1;
+    }
+    if (mxd_dht_set_keygen_algo(0) == 0 || mxd_dht_set_keygen_algo(3) == 0) {
+        printf("FAIL: setter accepted an invalid algo_id\n");
+        return 1;
+    }
+    if (mxd_dht_set_keygen_algo(1) != 0 || mxd_dht_get_keygen_algo() != 1) {
+        printf("FAIL: setter did not switch to Ed25519\n");
+        return 1;
+    }
+    if (mxd_dht_set_keygen_algo(2) != 0 || mxd_dht_get_keygen_algo() != 2) {
+        printf("FAIL: setter did not switch back to Dilithium5\n");
+        return 1;
+    }
+    printf("Keygen algorithm selector OK (default Dilithium5)\n");
+    fflush(stdout);
+
     return 0;
 }

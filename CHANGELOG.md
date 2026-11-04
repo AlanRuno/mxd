@@ -12,7 +12,86 @@ versions track the C library and tooling as a whole.
 
 ## [Unreleased]
 
+## [0.3.0] — Protocol v9/v10, ML-DSA-87 validator set, P2P and log fixes
+
+The code behind the five mainnet validators since 2026-11-04. Protocol v9 and v10 have been
+live on mainnet since blocks 30 and 52 (2026-10-09 and 2026-10-11); the validator set has been
+100 % ML-DSA-87 since 2026-10-09.
+
+### Changed
+
+- **Consensus — protocol v9 (`src/blockchain/mxd_rsc.c`, `src/mxd_protocol_version.c`):**
+  the committed `validator_scores` carried by each block drop validators evicted under v8,
+  so departed validators leave the proposer rotation and the validation-chain signing order
+  instead of lingering as dead slots. Activation: mainnet height 30, testnet 37970.
+  Rebuilding the committed set from the chain now replays EVICT entries as well as JOINs.
+  Spec: MXD-CONS-01 1.2.1.
+
+- **Consensus — protocol v10 (`src/blockchain/mxd_validator_management.c`,
+  `src/blockchain/mxd_blockchain.c`):** validator JOIN requests are admitted only for
+  Dilithium5 (FIPS 204 ML-DSA-87) identities from the activation height; genesis validators
+  are exempt. Enforced in the local admission path, at membership-entry verification, and
+  by the node's own auto-join gate. Activation: mainnet height 52, testnet 37980, devnet 0.
+  Spec: MXD-CONS-01 1.3.0. All five mainnet validators have operated ML-DSA-87 identities
+  since 2026-10-09 (rotated via JOIN/EVICT without downtime).
+
+- **Node identity (`src/mxd_dht.c`, `src/node/main.c`, `tools/mxd_keygen.c`):** the key
+  generation algorithm for a fresh node identity is selectable (`mxd_dht_set_keygen_algo`)
+  and defaults to Dilithium5; `preferred_sign_algo` in the node config is applied before
+  the DHT identity is created. `mxd_keygen` gains the same selection.
+
+### Fixed
+
+- **P2P keepalive (`src/mxd_p2p.c`):** persistent connections between validators were
+  torn down every `MXD_KEEPALIVE_TIMEOUT` (45 s) on both ends and re-established, forever.
+  Liveness was refreshed only by PING/PONG, but PINGs are sent only to links idle for
+  `MXD_KEEPALIVE_INTERVAL` (15 s) — a busy link (height polls every 5 s) never saw one.
+  Received messages were also credited to a record keyed by the inbound socket's
+  ephemeral port, so the record keyed by the peer's listen port starved and was reported
+  "timed out" every 15 s, and PINGs/broadcasts were attempted against ephemeral ports
+  ("Failed to connect … after N attempts"). Now any validated message refreshes the
+  connection, messages are attributed to the peer's listen port, an inbound connection
+  counts as "already connected" for peers learned via PEERS, and the keepalive decision
+  (`mxd_p2p_peer_liveness`) measures silence from the last message received — or from
+  activation for a peer never heard from — so half-open links are still detected.
+  Tests: `tests/test_p2p_keepalive.c`.
+
+- **Validation-chain reconciliation (`src/mxd_blockchain_sync.c`,
+  `src/mxd_validation_handler.c`):** the periodic catch-up of validator signatures
+  re-requested, every ~30 s and from every peer, the chain of every recent block below
+  quorum, and rejected every answer with an error. Blocks produced while a validator in
+  the signing order was offline (identity rotation, rolling restart) never reach quorum
+  on any node, so on mainnet this ran forever at ~25k log lines/hour per validator.
+  Requests are now backed off per (height, hash) — immediately, then 1, 2, 4 … minutes
+  up to one hour — and a peer chain that does not extend the local one (a competing
+  proposal sharing the block hash, or signatures accepted in another order) is ignored
+  instead of being grafted position by position. New tests:
+  `tests/test_validation_reconcile.c`.
+
+- **Node log volume (`src/node/main.c`, `src/node/metrics_display.c`, `src/mxd_p2p.c`,
+  `src/blockchain/mxd_rsc.c`):** the full-screen metrics dashboard was logged once a
+  second even when stdout is not a terminal (73 % of a mainnet validator's ~3.7 million
+  journal lines a day); off a TTY the node now logs one status line a minute
+  (`MXD_DASHBOARD=1` restores the dashboard). Per-message P2P traces and the
+  once-a-second proposer-role lines moved to DEBUG or are throttled to one a minute.
+  `MXD_LOG_LEVEL=error|warn|info|debug` selects the log level at start-up.
+
+- **Blockchain DB (`src/mxd_blockchain_db.c`):** `mxd_init_blockchain_db` created the RocksDB
+  block cache and block-based table options and never released them, leaking both handles on
+  every open. They are now owned by the module and destroyed in `mxd_close_blockchain_db`,
+  mirroring the UTXO store. Found by LeakSanitizer in `consensus_safety_tests` (which reopens
+  the DB), the failure behind the red clang CI job since 2026-08-24.
+
 ### Security
+
+- **Node HTTP API (`src/mxd_monitoring.c`):** `POST /bridge/authorize` now requires
+  `Authorization: Bearer <http.api_token>` regardless of `http.require_auth`, and fails
+  closed when no token is configured. Previously the handler carried an "admin only,
+  requires API token" comment but performed no check, so the bridge allow-list of any
+  validator could be written from the internet (no fund impact - mints still need 3-of-5
+  oracle signatures - but an integrity and disk-fill DoS vector). Confirms the HIGH finding
+  of the June 2026 internal consensus audit. The replicated, quorum-signed path
+  (`AUTHORIZE_BRIDGE` admin tx via `POST /admin/submit`) is unchanged.
 
 - **Bridge contracts (`contracts/MXDBridgeV3.sol`):** `recoverToken` now uses
   `SafeERC20.safeTransfer` instead of a raw `IERC20.transfer`. A token whose
@@ -23,7 +102,6 @@ versions track the C library and tooling as a whole.
   BSC mainnet (`0xCae102064d8E9e13d5b48F38bAc53d1155B331B4`) is immutable, so the
   on-chain behaviour changes with the next deployment generation. Reported
   privately on 2026-09-04 by **ibnu76** — thank you.
-
 
 ---
 
