@@ -117,6 +117,9 @@ int mxd_calculate_block_hash(const mxd_block_t *block, uint8_t hash[64]) {
   } else if (block->version >= 5) {
     header_size += 20; // next_proposer (legacy 20 bytes)
   }
+  if (block->version >= 11) {
+    header_size += 32; // proposer_id (addr32) — v11 binds the proposer into the hash
+  }
 
   uint8_t *header = malloc(header_size);
   if (!header) {
@@ -154,6 +157,16 @@ int mxd_calculate_block_hash(const mxd_block_t *block, uint8_t hash[64]) {
   } else if (block->version >= 5) {
     memcpy(header + offset, block->next_proposer, 20);
     offset += 20;
+  }
+
+  // v11: the proposer is part of the block identity. Before v11 two proposers
+  // (primary and fallback) building the same content produced the SAME hash,
+  // each node kept the copy it saw first with that proposer's position-0
+  // signature, and the validation chains of "one" block diverged across nodes
+  // (mainnet block 47, 2026-10-11).
+  if (block->version >= 11) {
+    memcpy(header + offset, block->proposer_id, 32);
+    offset += 32;
   }
 
   uint64_t timestamp_be = mxd_htonll(block->timestamp);
@@ -463,8 +476,8 @@ int mxd_validate_block(const mxd_block_t *block) {
     return -1;
   }
 
-  // Verify block version is within valid range (v1-v6)
-  if (block->version < 1 || block->version > 6) {
+  // Verify block version is within the range this binary understands
+  if (block->version < 1 || block->version > MXD_CURRENT_PROTOCOL_VERSION) {
     MXD_LOG_ERROR("blockchain", "Invalid block version: %u", block->version);
     return -1;
   }

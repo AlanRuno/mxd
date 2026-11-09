@@ -77,6 +77,17 @@ int mxd_votebook_claim(uint32_t height, const uint8_t block_hash[64]);
 // quorum-certified. Returns 0 on success (incl. no-op), -1 on error.
 int mxd_rollback_to_height(uint32_t target_height);
 
+// v11-C: walk the canonical chain from the tip down and point every height
+// key at the real ancestor of the tip (a losing sibling could be left under
+// the height key by the pre-v11 append path — mainnet node-2 h=35). Returns
+// the number of heights rewritten, 0 when consistent, -1 on error. Call once
+// at start-up before the rapid table is rebuilt from the chain.
+int mxd_repair_height_index(void);
+
+// Test hook: store a block without the parent-continuity check of
+// mxd_store_block (to build the legacy inconsistent state the repair fixes).
+int mxd_test_store_block_unconditional(const mxd_block_t *block);
+
 #ifdef __cplusplus
 }
 #endif

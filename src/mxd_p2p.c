@@ -2809,6 +2809,16 @@ static int mxd_send_message_nonblocking(const char* address, uint16_t port,
     return 0;
 }
 
+// Send over an existing persistent connection only: never dials, never waits for a
+// session token. Consensus broadcasts use this so one dead validator cannot stall the
+// delivery to the live ones (the connector thread re-dials in the background and the
+// reconcile path catches the absent peer up when it returns).
+int mxd_send_message_if_connected(const char* address, uint16_t port,
+                                  mxd_message_type_t type, const void* payload,
+                                  size_t payload_length) {
+    return mxd_send_message_nonblocking(address, port, type, payload, payload_length);
+}
+
 int mxd_send_message(const char* address, uint16_t port,
                     mxd_message_type_t type, const void* payload,
                     size_t payload_length) {

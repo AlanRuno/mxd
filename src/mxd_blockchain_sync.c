@@ -1352,30 +1352,51 @@ int mxd_process_incoming_validation_chain(const uint8_t block_hash[64],
         return -1;
     }
 
-    // Nothing to learn from a chain no longer than ours.
-    if (signature_count <= block.validation_count) {
+    int extends = mxd_validation_chain_extends_local(&block, signatures, signature_count);
+    // Nothing to learn from a chain that extends ours but is no longer.
+    if (extends == 1 && signature_count <= block.validation_count) {
         mxd_free_block(&block);
         return 0;
     }
-
-    // A chain whose prefix differs from ours is another view of the same
-    // height (a competing proposal with the same hash — the hash does not bind
-    // the proposer — or a peer that accepted signatures in another order).
-    // Chain hashes are sequential, so its signatures can never verify on top
-    // of our copy: do not try. Every attempt failed the position/crypto check
-    // and logged an error — that was the mainnet log storm.
-    if (mxd_validation_chain_extends_local(&block, signatures, signature_count) != 1) {
-        MXD_LOG_DEBUG("sync", "Validation chain for block %u diverges from the local copy (%u sigs vs %u); ignoring",
-                      block.height, signature_count, block.validation_count);
-        mxd_free_block(&block);
-        return 0;
+    int added = 0;
+    if (extends != 1) {
+        // A chain whose prefix differs from ours is another view of the same
+        // block (pre-v11: a competing proposal with the same hash; v11: two live
+        // validators that both took one position). Pre-v11 chains are ignored
+        // (their signatures can never verify on top of ours; trying was the
+        // mainnet log storm). v11 chains converge: the first differing signature
+        // is offered to the admission path, which replaces our signer at that
+        // position when the incoming one outranks it (MXD-CONS-01 §3.5) and
+        // drops what we had built on it; the rest is then appended normally.
+        uint32_t d = 0;
+        uint32_t common = (signature_count < block.validation_count) ? signature_count : block.validation_count;
+        while (d < common && signatures[d].chain_position == d &&
+               memcmp(block.validation_chain[d].validator_id, signatures[d].validator_id, 32) == 0 &&
+               block.validation_chain[d].signature_length == signatures[d].signature_length &&
+               memcmp(block.validation_chain[d].signature, signatures[d].signature, signatures[d].signature_length) == 0) {
+            d++;
+        }
+        int adopted = 0;
+        if (block.version >= MXD_PROTOCOL_VERSION_11 && d >= 1 && d < block.validation_count &&
+            d < signature_count && signatures[d].chain_position == d &&
+            mxd_verify_and_add_validation_signature(&block, signatures[d].validator_id, signatures[d].algo_id,
+                                                  signatures[d].signature, signatures[d].signature_length,
+                                                  signatures[d].timestamp, /* skip_drift_check */ 1) == 0) {
+            adopted = 1;
+        }
+        if (!adopted) {
+            MXD_LOG_DEBUG("sync", "Validation chain for block %u diverges from the local copy (%u sigs vs %u); ignoring",
+                          block.height, signature_count, block.validation_count);
+            mxd_free_block(&block);
+            return 0;
+        }
+        MXD_LOG_INFO("sync", "v11 convergence: adopted the incoming chain of block %u from position %u", block.height, d);
+        added = 1;
     }
-
     // Append only the positions we are missing, in order. Stop at the first
     // failure: later positions cannot verify without it. skip_drift_check=1
     // because sigs may be hours old (catch-up of an older block); the
     // cryptographic verification still gates them.
-    int added = 0;
     for (uint32_t i = block.validation_count; i < signature_count; i++) {
         if (mxd_verify_and_add_validation_signature(&block,
                                                   signatures[i].validator_id,
@@ -1476,6 +1497,24 @@ int mxd_check_block_relay_status(const uint8_t block_hash[64]) {
     int has_enough = (block.validation_count >= MXD_MIN_RELAY_SIGNATURES) ? 1 : 0;
     mxd_free_block(&block);
     return has_enough;
+}
+
+void mxd_sign_tip_if_due(void) {
+    uint32_t count = 0;
+    if (mxd_get_blockchain_height(&count) != 0 || count == 0) return;
+
+    mxd_block_t tip;
+    memset(&tip, 0, sizeof(tip));
+    if (mxd_retrieve_block_by_height(count - 1, &tip) != 0) return;
+
+    if (tip.version >= MXD_PROTOCOL_VERSION_11) {
+        const mxd_rapid_table_t *t = mxd_get_rapid_table();
+        uint32_t quorum = (t && t->count > 0) ? (uint32_t)((t->count * 2 + 2) / 3) : 4;
+        if (tip.validation_count < quorum) {
+            mxd_sign_and_broadcast_block(&tip);
+        }
+    }
+    mxd_free_block(&tip);
 }
 
 int mxd_sync_rapid_table(mxd_rapid_table_t *table, const char *local_node_id) {
@@ -1676,7 +1715,22 @@ int mxd_pull_missing_blocks(void) {
 
 // Sign a received block and broadcast signature to the network
 // This is called by validators when they receive a new block
-int mxd_sign_and_broadcast_block(const mxd_block_t *block) {
+// Signing is serialized and always evaluated against the stored copy of the
+// block: the consensus thread (mxd_sign_tip_if_due) and the message handlers
+// can both decide to sign the same block, and the caller's copy may predate
+// our own signature being stored. Without this a validator signed the same
+// position twice (devnet, 2026-11-04) and peers logged duplicate signatures.
+static pthread_mutex_t g_sign_mutex;
+static pthread_once_t g_sign_mutex_once = PTHREAD_ONCE_INIT;
+static void init_sign_mutex(void) {
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&g_sign_mutex, &attr);
+    pthread_mutexattr_destroy(&attr);
+}
+
+static int sign_and_broadcast_block_locked(const mxd_block_t *block) {
     if (!block || block->height == 0) {
         return -1;  // Don't sign genesis block here
     }
@@ -1741,27 +1795,60 @@ int mxd_sign_and_broadcast_block(const mxd_block_t *block) {
     // outcomes are routine and logged at DEBUG only; at the tip they still
     // deserve attention.
     int historical = (block->height + 1 < local_height);
-    int my_position = mxd_get_my_signing_position(table, block->proposer_id, local_address, block->height);
-    if (my_position < 0) {
-        if (historical) {
-            MXD_LOG_DEBUG("sync", "Not in signing order for block %u", block->height);
-        } else {
-            MXD_LOG_WARN("sync", "Not in signing order for block %u", block->height);
+    int my_position;
+    if (block->version >= MXD_PROTOCOL_VERSION_11) {
+        // v11: deterministic skip. Our rank is the number of canonical-order
+        // validators ahead of us that have not signed yet; rank 0 signs at
+        // once, rank j may take the next position once rank * MXD_SIGN_SKIP_MS
+        // has elapsed since the previous signature (mxd_sign_tip_if_due
+        // re-checks every second). The position we take is the next chain
+        // slot, whatever our canonical position is.
+        int rank = mxd_signing_rank(block, local_address);
+        if (rank == -2) {
+            if (!historical) {
+                MXD_LOG_WARN("sync", "Cannot derive the committed signer order for block %u; not signing", block->height);
+            }
+            return 0;
         }
-        return 0;
-    }
+        if (rank < 0) {
+            MXD_LOG_DEBUG("sync", "Not admissible as a signer of block %u (proposer, already signed or outside the canonical set)",
+                          block->height);
+            return 0;
+        }
+        uint64_t not_before = mxd_signing_not_before_ms(block, rank);
+        if (rank > 0 && mxd_now_ms() < not_before) {
+            MXD_LOG_DEBUG("sync", "Block %u: rank %d, waiting until %llu ms before taking position %u",
+                          block->height, rank, (unsigned long long)not_before, block->validation_count);
+            return 0;
+        }
+        my_position = (int)block->validation_count;
+        if (rank > 0) {
+            MXD_LOG_INFO("sync", "v11 skip: taking position %d of block %u with rank %d (%d validator(s) ahead did not sign within %llu ms each)",
+                         my_position, block->height, rank, rank, (unsigned long long)MXD_SIGN_SKIP_MS);
+        }
+    } else {
+        my_position = mxd_get_my_signing_position(table, block->proposer_id, local_address, block->height);
+        if (my_position < 0) {
+            if (historical) {
+                MXD_LOG_DEBUG("sync", "Not in signing order for block %u", block->height);
+            } else {
+                MXD_LOG_WARN("sync", "Not in signing order for block %u", block->height);
+            }
+            return 0;
+        }
 
-    // Check if it's our turn: we need all preceding signatures present
-    if ((uint32_t)my_position != block->validation_count) {
-        // Not our turn yet - need more preceding signatures
-        if (historical) {
-            MXD_LOG_DEBUG("sync", "Not our turn yet for block %u (my_position=%d, validation_count=%u)",
-                          block->height, my_position, block->validation_count);
-        } else {
-            MXD_LOG_INFO("sync", "Not our turn yet for block %u (my_position=%d, validation_count=%u)",
-                         block->height, my_position, block->validation_count);
+        // Check if it's our turn: we need all preceding signatures present
+        if ((uint32_t)my_position != block->validation_count) {
+            // Not our turn yet - need more preceding signatures
+            if (historical) {
+                MXD_LOG_DEBUG("sync", "Not our turn yet for block %u (my_position=%d, validation_count=%u)",
+                              block->height, my_position, block->validation_count);
+            } else {
+                MXD_LOG_INFO("sync", "Not our turn yet for block %u (my_position=%d, validation_count=%u)",
+                             block->height, my_position, block->validation_count);
+            }
+            return 0;
         }
-        return 0;
     }
 
     // RISK-1 (A): per-height equivocation lock. We have passed all the "should
@@ -1869,7 +1956,7 @@ int mxd_sign_and_broadcast_block(const mxd_block_t *block) {
 
             int sent = 0;
             for (size_t i = 0; i < peer_count; i++) {
-                if (mxd_send_message(peers[i].address, peers[i].port,
+                if (mxd_send_message_if_connected(peers[i].address, peers[i].port,
                                     MXD_MSG_VALIDATION_SIGNATURE, msg, msg_len) == 0) {
                     sent++;
                 }
@@ -1911,7 +1998,7 @@ int mxd_sign_and_broadcast_block(const mxd_block_t *block) {
                             memcpy(rp, pos_chain_hash, 64);
 
                             for (size_t pi = 0; pi < peer_count; pi++) {
-                                mxd_send_message(peers[pi].address, peers[pi].port,
+                                mxd_send_message_if_connected(peers[pi].address, peers[pi].port,
                                                 MXD_MSG_VALIDATION_SIGNATURE, rmsg, rmsg_len);
                             }
                             resent++;
@@ -1929,4 +2016,17 @@ int mxd_sign_and_broadcast_block(const mxd_block_t *block) {
     }
 
     return 0;
+}
+
+int mxd_sign_and_broadcast_block(const mxd_block_t *block) {
+    if (!block || block->height == 0) return -1;
+    pthread_once(&g_sign_mutex_once, init_sign_mutex);
+    pthread_mutex_lock(&g_sign_mutex);
+    mxd_block_t fresh;
+    memset(&fresh, 0, sizeof(fresh));
+    int have_fresh = (mxd_retrieve_block_by_hash(block->block_hash, &fresh) == 0);
+    int rc = sign_and_broadcast_block_locked(have_fresh ? &fresh : block);
+    if (have_fresh) mxd_free_block(&fresh);
+    pthread_mutex_unlock(&g_sign_mutex);
+    return rc;
 }

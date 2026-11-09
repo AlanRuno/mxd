@@ -436,7 +436,7 @@ void mxd_validation_message_handler(const char *address, uint16_t port,
                 if (mxd_get_peers(relay_peers, &relay_peer_count) == 0 && relay_peer_count > 0) {
                     int relayed = 0;
                     for (size_t ri = 0; ri < relay_peer_count; ri++) {
-                        if (mxd_send_message(relay_peers[ri].address, relay_peers[ri].port,
+                        if (mxd_send_message_if_connected(relay_peers[ri].address, relay_peers[ri].port,
                                             MXD_MSG_VALIDATION_SIGNATURE, payload, payload_length) == 0) {
                             relayed++;
                         }

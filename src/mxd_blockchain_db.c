@@ -960,6 +960,69 @@ static int store_block_unconditional(const mxd_block_t *block) {
  *   - Different hash at same height: forks detected. Apply fork-choice rule
  *     in handle_block_at_existing_height.
  */
+static int reorg_to_candidate(const mxd_block_t *candidate);
+
+/* v11-C — chain continuity on append.
+ *
+ * Before this check a block at height H == current_height was appended
+ * whatever its prev_block_hash said, so a losing fork candidate could stay
+ * under the height key while the canonical chain continued from its sibling
+ * (mainnet node-2, h=35, 2026-10-09): every by-height read of that height —
+ * including the committed-order derivation for h+1 — then saw the wrong
+ * block. Rules: a block whose parent IS the indexed block at H-1 is appended
+ * as before; a block whose parent is a stored sibling of that block promotes
+ * the sibling (a depth-1 reorg: the validators are extending that branch,
+ * which is the strongest evidence fork-choice can get); a block whose parent
+ * is unknown is refused and left to the sync path, which fetches parents in
+ * order. A gap below H (nothing at H-1) keeps the legacy behaviour. */
+static int ensure_parent_continuity(const mxd_block_t *block) {
+    if (!block || block->height == 0) return 0;
+
+    mxd_block_t at_prev;
+    memset(&at_prev, 0, sizeof(at_prev));
+    if (mxd_retrieve_block_by_height(block->height - 1, &at_prev) != 0) {
+        return 0;  /* gap below: nothing to compare against */
+    }
+    int same = (memcmp(at_prev.block_hash, block->prev_block_hash, 64) == 0);
+    mxd_free_block(&at_prev);
+    if (same) return 0;
+
+    mxd_block_t parent;
+    memset(&parent, 0, sizeof(parent));
+    if (mxd_retrieve_block_by_hash(block->prev_block_hash, &parent) != 0) {
+        MXD_LOG_WARN("fork_choice",
+                     "Block h=%u extends an unknown parent %02x%02x%02x%02x...; not appending it over a different block at h=%u (the sync path fetches parents in order)",
+                     block->height,
+                     block->prev_block_hash[0], block->prev_block_hash[1],
+                     block->prev_block_hash[2], block->prev_block_hash[3],
+                     block->height - 1);
+        return -1;
+    }
+    if (parent.height != block->height - 1) {
+        MXD_LOG_WARN("fork_choice", "Block h=%u names a parent stored at h=%u; refusing",
+                     block->height, parent.height);
+        mxd_free_block(&parent);
+        return -1;
+    }
+    MXD_LOG_WARN("fork_choice",
+                 "Block h=%u extends sibling %02x%02x%02x%02x... at h=%u instead of the indexed block; promoting the sibling (reorg depth 1)",
+                 block->height,
+                 parent.block_hash[0], parent.block_hash[1], parent.block_hash[2], parent.block_hash[3],
+                 parent.height);
+    int rc = reorg_to_candidate(&parent);
+    mxd_free_block(&parent);
+    if (rc != 0) {
+        MXD_LOG_ERROR("fork_choice", "Promotion of the parent at h=%u failed; block h=%u not stored",
+                      block->height - 1, block->height);
+        return -1;
+    }
+    return 0;
+}
+
+int mxd_test_store_block_unconditional(const mxd_block_t *block) {
+    return store_block_unconditional(block);
+}
+
 int mxd_store_block(const mxd_block_t *block) {
     if (!block || !mxd_get_rocksdb_db()) return -1;
 
@@ -991,7 +1054,13 @@ int mxd_store_block(const mxd_block_t *block) {
     int have_existing = (mxd_retrieve_block_by_height(block->height, &existing) == 0);
 
     if (!have_existing) {
-        /* Normal path: no block at this height yet. */
+        /* Normal path: no block at this height yet. The block must extend the
+         * block the height index holds at height-1; if it extends a losing
+         * sibling instead, that sibling's branch is now the one validators
+         * build on, so promote it first (v11-C, see ensure_parent_continuity). */
+        if (ensure_parent_continuity(block) != 0) {
+            return -1;
+        }
         return store_block_unconditional(block);
     }
 
@@ -2254,6 +2323,103 @@ int mxd_serialize_block_for_network(const mxd_block_t *block, uint8_t **data, si
         return -1;
     }
     return serialize_block(block, data, data_len);
+}
+
+/* Same multiset of transaction payloads in both blocks (order-insensitive). */
+static int block_tx_sets_equal(const mxd_block_t *a, const mxd_block_t *b) {
+    if (a->transaction_count != b->transaction_count) return 0;
+    for (uint32_t i = 0; i < a->transaction_count; i++) {
+        int found = 0;
+        for (uint32_t j = 0; j < b->transaction_count; j++) {
+            if (a->transactions[i].length == b->transactions[j].length &&
+                memcmp(a->transactions[i].data, b->transactions[j].data, a->transactions[i].length) == 0) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) return 0;
+    }
+    return 1;
+}
+
+int mxd_repair_height_index(void) {
+    uint32_t count = 0;
+    if (!mxd_get_rocksdb_db() || mxd_get_blockchain_height(&count) != 0 || count < 2) return 0;
+
+    uint32_t h = count - 1;
+    mxd_block_t tip;
+    memset(&tip, 0, sizeof(tip));
+    if (mxd_retrieve_block_by_height(h, &tip) != 0) return 0;
+    uint8_t want[64];
+    memcpy(want, tip.prev_block_hash, 64);
+    mxd_free_block(&tip);
+
+    int fixed = 0;
+    while (h > 0) {
+        h--;
+        mxd_block_t at;
+        memset(&at, 0, sizeof(at));
+        if (mxd_retrieve_block_by_height(h, &at) != 0) break;  /* gap: nothing to repair below */
+        if (memcmp(at.block_hash, want, 64) == 0) {
+            memcpy(want, at.prev_block_hash, 64);
+            mxd_free_block(&at);
+            continue;
+        }
+        mxd_block_t parent;
+        memset(&parent, 0, sizeof(parent));
+        if (mxd_retrieve_block_by_hash(want, &parent) != 0 || parent.height != h) {
+            MXD_LOG_ERROR("db",
+                          "Height index: block at h=%u (%02x%02x%02x%02x...) is not the ancestor of the tip and the ancestor %02x%02x%02x%02x... is not stored; resync required",
+                          h, at.block_hash[0], at.block_hash[1], at.block_hash[2], at.block_hash[3],
+                          want[0], want[1], want[2], want[3]);
+            mxd_free_block(&at);
+            if (parent.height == h) mxd_free_block(&parent);
+            return fixed > 0 ? fixed : -1;
+        }
+        int same_txs = block_tx_sets_equal(&at, &parent);
+
+        uint8_t height_key[13 + sizeof(uint32_t)];
+        size_t height_key_len;
+        create_block_height_key(h, height_key, &height_key_len);
+        uint8_t *data = NULL;
+        size_t data_len = 0;
+        if (serialize_block(&parent, &data, &data_len) != 0) {
+            MXD_LOG_ERROR("db", "Height index repair: cannot serialize the ancestor at h=%u", h);
+            mxd_free_block(&at);
+            mxd_free_block(&parent);
+            return -1;
+        }
+        char *err = NULL;
+        rocksdb_put(mxd_get_rocksdb_db(), mxd_get_rocksdb_writeoptions(),
+                    (char *)height_key, height_key_len, (char *)data, data_len, &err);
+        free(data);
+        if (err) {
+            MXD_LOG_ERROR("db", "Height index repair: write failed at h=%u: %s", h, err);
+            free(err);
+            mxd_free_block(&at);
+            mxd_free_block(&parent);
+            return -1;
+        }
+        if (same_txs) {
+            MXD_LOG_WARN("db",
+                         "Height index repaired at h=%u: %02x%02x%02x%02x... (orphan, %u sigs) -> %02x%02x%02x%02x... (ancestor of the tip, %u sigs); same transactions, UTXO state unaffected",
+                         h, at.block_hash[0], at.block_hash[1], at.block_hash[2], at.block_hash[3], at.validation_count,
+                         parent.block_hash[0], parent.block_hash[1], parent.block_hash[2], parent.block_hash[3], parent.validation_count);
+        } else {
+            MXD_LOG_ERROR("db",
+                          "Height index repaired at h=%u: %02x%02x%02x%02x... -> %02x%02x%02x%02x... but the two blocks carry DIFFERENT transactions; the UTXO set may be inconsistent — resync this node",
+                          h, at.block_hash[0], at.block_hash[1], at.block_hash[2], at.block_hash[3],
+                          parent.block_hash[0], parent.block_hash[1], parent.block_hash[2], parent.block_hash[3]);
+        }
+        fixed++;
+        memcpy(want, parent.prev_block_hash, 64);
+        mxd_free_block(&at);
+        mxd_free_block(&parent);
+    }
+    if (fixed == 0) {
+        MXD_LOG_INFO("db", "Height index verified: every height holds an ancestor of the tip");
+    }
+    return fixed;
 }
 
 int mxd_block_exists_at_height(uint32_t height) {

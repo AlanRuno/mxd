@@ -2192,6 +2192,38 @@ const char* mxd_handle_wallet_import(const char* encrypted_data, const char* pas
     return wallet_response_buffer;
 }
 
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+#ifndef MSG_MORE
+#define MSG_MORE 0
+#endif
+
+/* Total time one response may take. This server handles one connection at a
+ * time, and a client that keeps reading a few bytes never trips SO_SNDTIMEO, so
+ * without this budget it could hold every other request back indefinitely. */
+#define MXD_HTTP_SEND_BUDGET_SECONDS 30
+
+/* Sends all of data, or returns -1 on error, on SO_SNDTIMEO without progress, or
+ * once the deadline has passed. */
+static int http_send_all(int fd, const char *data, size_t len, int flags, time_t deadline) {
+    while (len > 0) {
+        if (time(NULL) >= deadline) {
+            return -1;
+        }
+        ssize_t sent = send(fd, data, len, flags | MSG_NOSIGNAL);
+        if (sent < 0 && errno == EINTR) {
+            continue;
+        }
+        if (sent <= 0) {
+            return -1;
+        }
+        data += sent;
+        len -= (size_t)sent;
+    }
+    return 0;
+}
+
 static void handle_http_request(int client_socket) {
     char buffer[131072];  // 128KB — fits 5-of-5 Dilithium5 bridge_mint (~72 KB JSON+hex)
     size_t total_read = 0;
@@ -2279,6 +2311,7 @@ static void handle_http_request(int client_socket) {
     }
     
     const char* response_body = NULL;
+    char* owned_body = NULL;  // Set when response_body is heap memory for this request only
     const char* content_type = "text/plain";
     int status_code = 404;
     int is_wallet_endpoint = 0;
@@ -2398,17 +2431,17 @@ static void handle_http_request(int client_socket) {
                         mxd_free_utxo(&utxos[i]);
                     }
                     free(utxos);
-                    response_body = cJSON_PrintUnformatted(root);
+                    owned_body = cJSON_PrintUnformatted(root);
                     cJSON_Delete(root);
                 } else {
-                    response_body = strdup("{\"address\":\"" "addr" "\",\"utxos\":[]}");
-                    // Build proper response
-                    char *buf = malloc(128);
-                    snprintf(buf, 128, "{\"address\":\"%s\",\"utxos\":[]}", addr_hex);
-                    response_body = buf;
+                    owned_body = malloc(128);
+                    if (owned_body) {
+                        snprintf(owned_body, 128, "{\"address\":\"%s\",\"utxos\":[]}", addr_hex);
+                    }
                 }
+                response_body = owned_body;
             } else {
-                response_body = strdup("{\"error\":\"Invalid address\"}");
+                response_body = "{\"error\":\"Invalid address\"}";
             }
             content_type = "application/json";
             status_code = 200;
@@ -2654,8 +2687,14 @@ static void handle_http_request(int client_socket) {
         status_code = 404;
     }
     
-    char response[16384];
-    int response_len = snprintf(response, sizeof(response),
+    /* Only the headers go through a fixed buffer; the body is sent as is. The
+     * whole response used to be formatted into a 16 KB stack buffer and sent with
+     * snprintf's return value, which is the length it WOULD have written. Past
+     * 16 KB that sent stack memory after the buffer in place of the end of the
+     * body. */
+    char headers[1024];
+    size_t body_len = strlen(response_body);
+    int header_len = snprintf(headers, sizeof(headers),
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %zu\r\n"
@@ -2667,15 +2706,19 @@ static void handle_http_request(int client_socket) {
         "X-Frame-Options: DENY\r\n"
         "X-XSS-Protection: 1; mode=block\r\n"
         "Strict-Transport-Security: max-age=31536000; includeSubDomains\r\n"
-        "\r\n"
-        "%s",
+        "\r\n",
         status_code,
         status_code == 200 ? "OK" : (status_code == 400 ? "Bad Request" : (status_code == 401 ? "Unauthorized" : (status_code == 403 ? "Forbidden" : (status_code == 429 ? "Too Many Requests" : "Not Found")))),
         content_type,
-        strlen(response_body),
-        response_body);
-    
-    send(client_socket, response, response_len, 0);
+        body_len);
+
+    if (header_len > 0 && (size_t)header_len < sizeof(headers)) {
+        time_t deadline = time(NULL) + MXD_HTTP_SEND_BUDGET_SECONDS;
+        if (http_send_all(client_socket, headers, (size_t)header_len, MSG_MORE, deadline) == 0) {
+            http_send_all(client_socket, response_body, body_len, 0, deadline);
+        }
+    }
+    free(owned_body);
     close(client_socket);
 }
 

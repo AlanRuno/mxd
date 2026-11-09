@@ -166,6 +166,11 @@ static void *consensus_thread_func(void *arg) {
                 reconcile_counter = 0;
                 mxd_reconcile_validation_chains(20);
             }
+            // v11: a signer whose turn comes only after a skip window is not
+            // re-triggered by any message, so re-check the tip once a second.
+            if (reconcile_counter % 5 == 0) {
+                mxd_sign_tip_if_due();
+            }
         }
 
         usleep(200000);  // 200ms — consensus tick fires ~5x/second
@@ -700,6 +705,19 @@ int main(int argc, char** argv) {
         return 1;
     }
     MXD_LOG_INFO("node", "UTXO database initialized successfully");
+
+    // v11-C: make sure every height key holds an ancestor of the tip before
+    // anything (rapid-table rebuild, committed-order derivation) reads the
+    // chain by height. A losing fork candidate could be left under a height
+    // key by the pre-v11 append path.
+    {
+        int repaired = mxd_repair_height_index();
+        if (repaired > 0) {
+            MXD_LOG_WARN("node", "Height index repaired at %d height(s) — see the db log lines above", repaired);
+        } else if (repaired < 0) {
+            MXD_LOG_ERROR("node", "Height index could not be fully repaired — a resync of this node may be required");
+        }
+    }
     log_memory_usage("after_utxo_db");
 
     // Initialize transaction validation (gates mxd_validate_transaction's early check).

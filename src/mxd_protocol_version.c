@@ -27,7 +27,8 @@ static const mxd_activation_heights_t MAINNET_HEIGHTS = {
     .v8_activation_height = 20,      // v8 activates at h=20 (was 100). PQ validator rotation 2026-10-07: mainnet tip h=15, dormant
                                      // (blocks only on demand); the v8 pair MUST be on all 5 validators before any new block is produced.
     .v9_activation_height = 30,      // v9: evicted validators leave the committed order (2026-10-09, tip h=27; v9 pair on all 5 before h=30)
-    .v10_activation_height = 52      // v10: JOIN admits only Dilithium5 (2026-10-11, tip h=46; all 5 validators already ML-DSA-87)
+    .v10_activation_height = 52,     // v10: JOIN admits only Dilithium5 (2026-10-11, tip h=46; all 5 validators already ML-DSA-87)
+    .v11_activation_height = 60      // v11: proposer_id in the block hash + deterministic signer skip (2026-11, tip h=53; v11 pair on all 5 before h=60)
 };
 
 static const mxd_activation_heights_t TESTNET_HEIGHTS = {
@@ -39,7 +40,8 @@ static const mxd_activation_heights_t TESTNET_HEIGHTS = {
     .v7_activation_height = 0,       // v7 from genesis on fresh testnet
     .v8_activation_height = 55,      // v8 retry: integrated auto-EVICT into auto-join thread (chain at h=48; 7 blocks margin)
     .v9_activation_height = 37970,   // v9 rehearsal (chain at h=37,956 on 2026-10-09)
-    .v10_activation_height = 37980   // v10 rehearsal (chain at h=37,974 on 2026-10-09)
+    .v10_activation_height = 37980,  // v10 rehearsal (chain at h=37,974 on 2026-10-09)
+    .v11_activation_height = 37990   // v11 rehearsal (chain at h=37,986 on 2026-11-04)
 };
 
 static const mxd_activation_heights_t DEVNET_HEIGHTS = {
@@ -51,7 +53,8 @@ static const mxd_activation_heights_t DEVNET_HEIGHTS = {
     .v7_activation_height = 0,       // v7 from genesis (for development)
     .v8_activation_height = 0,       // v8 from genesis (for development)
     .v9_activation_height = 0,       // v9 from genesis (for development)
-    .v10_activation_height = 0       // v10 from genesis (for development; genesis block itself is exempt)
+    .v10_activation_height = 0,      // v10 from genesis (for development; genesis block itself is exempt)
+    .v11_activation_height = 0       // v11 from genesis (for development)
 };
 
 // Get activation heights for a specific network
@@ -75,7 +78,9 @@ uint32_t mxd_get_required_protocol_version(uint32_t height, mxd_network_type_t n
     mxd_activation_heights_t heights = mxd_get_activation_heights(network);
 
     // Determine version based on activation heights (highest first)
-    if (height >= heights.v10_activation_height) {
+    if (height >= heights.v11_activation_height) {
+        return MXD_PROTOCOL_VERSION_11;
+    } else if (height >= heights.v10_activation_height) {
         return MXD_PROTOCOL_VERSION_10;
     } else if (height >= heights.v9_activation_height) {
         return MXD_PROTOCOL_VERSION_9;

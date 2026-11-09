@@ -52,7 +52,8 @@ static int mxd_validate_config(mxd_config_t* config) {
     
     // Validate network type
     if (strcmp(config->network_type, "mainnet") != 0 && 
-        strcmp(config->network_type, "testnet") != 0) return -1;
+        strcmp(config->network_type, "testnet") != 0 &&
+        strcmp(config->network_type, "devnet") != 0) return -1;
     
     // Validate bootstrap nodes
     if (config->bootstrap_count > 10) return -1;
@@ -535,6 +536,12 @@ int mxd_fetch_bootstrap_nodes(mxd_config_t* config) {
         MXD_LOG_WARN("config", "No valid bootstrap nodes in MXD_BOOTSTRAP_NODES, falling back to API");
     }
     
+    // devnet is a private network: the configured bootstrap list is authoritative and the public
+    // bootstrap API (which only knows mainnet and testnet) must not be consulted.
+    if (strcmp(config->network_type, "devnet") == 0) {
+        MXD_LOG_INFO("config", "devnet: using %d configured bootstrap nodes (network API skipped)", config->bootstrap_count);
+        return 0;
+    }
     const char* endpoint = strcmp(config->network_type, "testnet") == 0 
         ? "https://mxd.network/bootstrap/test"
         : "https://mxd.network/bootstrap/main";

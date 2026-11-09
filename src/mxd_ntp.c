@@ -30,6 +30,8 @@ static const char *ntp_servers[] = {
 };
 
 static uint64_t last_sync_time = 0;
+#define MXD_NTP_RETRY_BACKOFF_MS 60000ULL   // after a failed sync, do not retry for a minute
+static uint64_t last_failed_attempt_time = 0;
 static uint64_t network_time_offset = 0;
 
 // Initialize NTP synchronization
@@ -135,13 +137,23 @@ int mxd_get_network_time(uint64_t *timestamp) {
         return -1;
     }
 
-    // Check if we need to resync (every hour)
+    // Resync every hour. A failed attempt (no route to the NTP pool, firewall,
+    // captive network) costs one receive timeout per server, so do not retry
+    // on every call: back off for MXD_NTP_RETRY_BACKOFF_MS and let callers fall
+    // back to the local clock meanwhile. Otherwise every signature check and
+    // every signing stalls for seconds while NTP is unreachable.
     uint64_t current_time = get_current_time_ms();
     if (current_time - last_sync_time > 3600000) {
-        mxd_ntp_info_t info;
-        if (mxd_sync_time(&info) != 0) {
+        if (last_failed_attempt_time != 0 &&
+            current_time - last_failed_attempt_time < MXD_NTP_RETRY_BACKOFF_MS) {
             return -1;
         }
+        mxd_ntp_info_t info;
+        if (mxd_sync_time(&info) != 0) {
+            last_failed_attempt_time = current_time;
+            return -1;
+        }
+        last_failed_attempt_time = 0;
     }
 
     *timestamp = get_current_time_ms() + network_time_offset;

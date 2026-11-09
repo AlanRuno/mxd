@@ -107,6 +107,21 @@ target_link_libraries(mxd_p2p_keepalive_tests
 add_test(NAME p2p_keepalive_tests COMMAND mxd_p2p_keepalive_tests)
 set_tests_properties(p2p_keepalive_tests PROPERTIES ENVIRONMENT "MXD_ENABLE_PEER_CONNECTOR=0")
 
+# HTTP API responses larger than the former 16 KB response buffer (real socket).
+add_executable(mxd_http_response_tests
+    test_http_response.c
+)
+
+target_link_libraries(mxd_http_response_tests
+    mxd
+    ${OPENSSL_LIBRARIES}
+    sodium
+    pthread
+)
+
+add_test(NAME http_response_tests COMMAND mxd_http_response_tests)
+set_tests_properties(http_response_tests PROPERTIES ENVIRONMENT "MXD_ENABLE_PEER_CONNECTOR=0")
+
 add_executable(mxd_smart_contracts_tests
     test_smart_contracts.c
 )
@@ -172,6 +187,21 @@ target_link_libraries(mxd_consensus_safety_tests
 
 add_test(NAME consensus_safety_tests COMMAND mxd_consensus_safety_tests)
 set_tests_properties(consensus_safety_tests PROPERTIES ENVIRONMENT "MXD_ENABLE_PEER_CONNECTOR=0")
+
+# Protocol v11: proposer bound into the block hash, deterministic signer skip
+# in the validation chain, parent continuity on append and height-index repair.
+add_executable(mxd_consensus_v11_tests
+    test_consensus_v11.c
+)
+
+target_link_libraries(mxd_consensus_v11_tests
+    mxd
+    ${OPENSSL_LIBRARIES}
+    sodium
+)
+
+add_test(NAME consensus_v11_tests COMMAND mxd_consensus_v11_tests)
+set_tests_properties(consensus_v11_tests PROPERTIES ENVIRONMENT "MXD_ENABLE_PEER_CONNECTOR=0")
 
 # Validation-chain reconciliation: peer-chain prefix compatibility and the
 # per-(height, hash) request backoff that replaced the permanent re-request

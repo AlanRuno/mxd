@@ -100,6 +100,11 @@ int mxd_send_message(const char *address, uint16_t port,
                      size_t payload_length);
 
 // Send message to peer with retry logic
+/* Send over an existing persistent connection only (no dial, no token wait). */
+int mxd_send_message_if_connected(const char *address, uint16_t port,
+                                  mxd_message_type_t type, const void *payload,
+                                  size_t payload_length);
+
 int mxd_send_message_with_retry(const char *address, uint16_t port,
                                 mxd_message_type_t type, const void *payload,
                                 size_t payload_length, int max_retries);

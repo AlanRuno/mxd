@@ -566,6 +566,100 @@ int mxd_compute_signing_order(const mxd_rapid_table_t *table,
     return 0;
 }
 
+// Canonical non-proposer signer order for a block: block(height-1)'s committed
+// order (mxd_compute_proposer_order) minus the proposer, rotated by height so
+// position 1 varies per block. Genesis (height 0) has no committed predecessor
+// and legitimately uses the live table. Writes addr32 pointers into `out`
+// (they point into `order_buf`, which must outlive `out`) and returns their
+// number, or -1 when no committed order can be derived post-genesis — the
+// caller must then refuse rather than fall back to the live table (see the
+// divergence note in mxd_get_my_signing_position).
+static int canonical_non_proposer_order(const mxd_rapid_table_t *table,
+                                        const uint8_t proposer_id[32],
+                                        uint64_t block_height,
+                                        uint8_t *order_buf,
+                                        const uint8_t *out[MXD_MAX_PROPOSER_ORDER]) {
+    uint32_t order_count = 0;
+    uint32_t count = 0;
+    if (block_height > 0 &&
+        mxd_compute_proposer_order((uint32_t)block_height, order_buf,
+                                   MXD_MAX_PROPOSER_ORDER, &order_count) == 0 &&
+        order_count > 0) {
+        for (uint32_t i = 0; i < order_count && count < MXD_MAX_PROPOSER_ORDER; i++) {
+            const uint8_t *a = order_buf + (size_t)i * 32;
+            if (memcmp(a, proposer_id, 32) == 0) continue;
+            out[count++] = a;
+        }
+    } else if (block_height == 0 && table) {
+        for (size_t i = 0; i < table->count && count < MXD_MAX_PROPOSER_ORDER; i++) {
+            if (!table->nodes[i]) continue;
+            if (memcmp(table->nodes[i]->node_address, proposer_id, 32) == 0) continue;
+            out[count++] = table->nodes[i]->node_address;
+        }
+    } else {
+        return -1;
+    }
+    if (count == 0) return -1;
+
+    uint32_t offset = (uint32_t)(block_height % count);
+    if (offset != 0) {
+        const uint8_t *rotated[MXD_MAX_PROPOSER_ORDER];
+        for (uint32_t pos = 0; pos < count; pos++) {
+            rotated[pos] = out[(pos + offset) % count];
+        }
+        memcpy(out, rotated, count * sizeof(out[0]));
+    }
+    return (int)count;
+}
+
+int mxd_signing_rank(const mxd_block_t *block, const uint8_t validator_id[32]) {
+    if (!block || !validator_id) return -1;
+    if (memcmp(validator_id, block->proposer_id, 32) == 0) return -1;
+    for (uint32_t i = 0; i < block->validation_count; i++) {
+        if (memcmp(block->validation_chain[i].validator_id, validator_id, 32) == 0) return -1;
+    }
+
+    uint8_t order_buf[MXD_MAX_PROPOSER_ORDER * 32];
+    const uint8_t *order[MXD_MAX_PROPOSER_ORDER];
+    int count = canonical_non_proposer_order(mxd_get_rapid_table(), block->proposer_id,
+                                             block->height, order_buf, order);
+    if (count < 0) return -2;
+
+    // Replay positions 1..K-1 over the canonical order: each signer is removed and
+    // the validators it was admitted ahead of (its rank at that position) move to
+    // the end of the remaining order, in their order. A validator that was passed
+    // over once is therefore not expected first again at every later position:
+    // an absent validator costs one MXD_SIGN_SKIP_MS slot per block, not one per
+    // position (devnet 2026-11-04: 32 s instead of 10 s for a 5-validator block).
+    const uint8_t *rem[MXD_MAX_PROPOSER_ORDER];
+    int rem_count = count;
+    memcpy(rem, order, (size_t)count * sizeof(rem[0]));
+    for (uint32_t p = 1; p < block->validation_count; p++) {
+        const uint8_t *signer = block->validation_chain[p].validator_id;
+        int j = -1;
+        for (int i = 0; i < rem_count; i++) {
+            if (memcmp(rem[i], signer, 32) == 0) { j = i; break; }
+        }
+        if (j < 0) continue;  // signer outside the remaining set: the crypto path decides
+        const uint8_t *next[MXD_MAX_PROPOSER_ORDER];
+        int n = 0;
+        for (int i = j + 1; i < rem_count; i++) next[n++] = rem[i];
+        for (int i = 0; i < j; i++) next[n++] = rem[i];
+        memcpy(rem, next, (size_t)n * sizeof(rem[0]));
+        rem_count = n;
+    }
+    for (int i = 0; i < rem_count; i++) {
+        if (memcmp(rem[i], validator_id, 32) == 0) return i;
+    }
+    return -1;
+}
+
+uint64_t mxd_signing_not_before_ms(const mxd_block_t *block, int rank) {
+    if (!block || rank <= 0 || block->validation_count == 0 || !block->validation_chain) return 0;
+    return block->validation_chain[block->validation_count - 1].timestamp +
+           (uint64_t)rank * MXD_SIGN_SKIP_MS;
+}
+
 int mxd_get_my_signing_position(const mxd_rapid_table_t *table,
                                 const uint8_t proposer_id[32],
                                 const uint8_t my_address[32],
@@ -592,59 +686,29 @@ int mxd_get_my_signing_position(const mxd_rapid_table_t *table,
     //
     // Signer (mxd_blockchain_sync.c) and verifier (this file) both call this
     // function, so unifying the ordering source here unifies both paths.
-    uint8_t order[MXD_MAX_PROPOSER_ORDER * 32];
-    uint32_t order_count = 0;
+    // HARDENING (fail-loud, not fail-divergent): post-genesis with the
+    // committed snapshot unavailable — block H-1 unretrievable, or the
+    // validator count exceeds MXD_MAX_PROPOSER_ORDER (256) so
+    // mxd_compute_proposer_order returns failure — REFUSE to assign a
+    // position (return -1) rather than falling back to the live rapid table.
+    //
+    // The old live-table fallback re-introduced the exact divergence this
+    // function was rewritten to remove: it fires per-node and ASYMMETRICALLY
+    // (one node reads committed order; another, mid-reorg or past the
+    // 256-cap, uses live order), so signer and verifier compute different
+    // positions, the position-dependent chain_hash diverges, and the chain
+    // forks. Post-genesis, mxd_compute_proposer_order succeeds on any
+    // caught-up node (block H-1 is the parent and carries committed scores),
+    // so refusing costs at most one signing round in a pathological window
+    // and self-corrects — a far safer failure mode than a silent fork.
+    uint8_t order_buf[MXD_MAX_PROPOSER_ORDER * 32];
     const uint8_t *non_proposers[MXD_MAX_PROPOSER_ORDER];
-    uint32_t count = 0;
+    int count = canonical_non_proposer_order(table, proposer_id, block_height, order_buf, non_proposers);
+    if (count < 0) return -1;
 
-    if (block_height > 0 &&
-        mxd_compute_proposer_order((uint32_t)block_height, order,
-                                   MXD_MAX_PROPOSER_ORDER, &order_count) == 0 &&
-        order_count > 0) {
-        // Canonical path: committed-snapshot order, proposer excluded.
-        for (uint32_t i = 0; i < order_count && count < MXD_MAX_PROPOSER_ORDER; i++) {
-            const uint8_t *a = order + (size_t)i * 32;
-            if (memcmp(a, proposer_id, 32) == 0) continue;
-            non_proposers[count++] = a;
-        }
-    } else if (block_height == 0 && table) {
-        // GENESIS ONLY: there is no committed predecessor at height 0, so the
-        // live membership/table order is the legitimate canonical source for
-        // genesis signing. This is the one case where the live table is correct.
-        for (size_t i = 0; i < table->count && count < MXD_MAX_PROPOSER_ORDER; i++) {
-            if (!table->nodes[i]) continue;
-            if (memcmp(table->nodes[i]->node_address, proposer_id, 32) == 0) continue;
-            non_proposers[count++] = table->nodes[i]->node_address;
-        }
-    } else {
-        // HARDENING (fail-loud, not fail-divergent): post-genesis with the
-        // committed snapshot unavailable — block H-1 unretrievable, or the
-        // validator count exceeds MXD_MAX_PROPOSER_ORDER (256) so
-        // mxd_compute_proposer_order returns failure — REFUSE to assign a
-        // position (return -1) rather than falling back to the live rapid table.
-        //
-        // The old live-table fallback re-introduced the exact divergence this
-        // function was rewritten to remove: it fires per-node and ASYMMETRICALLY
-        // (one node reads committed order; another, mid-reorg or past the
-        // 256-cap, uses live order), so signer and verifier compute different
-        // positions, the position-dependent chain_hash diverges, and the chain
-        // forks. Post-genesis, mxd_compute_proposer_order succeeds on any
-        // caught-up node (block H-1 is the parent and carries committed scores),
-        // so refusing costs at most one signing round in a pathological window
-        // and self-corrects — a far safer failure mode than a silent fork.
-        return -1;
-    }
-
-    if (count == 0) return -1;
-
-    // Rotate by block_height so position 1 varies per block (unchanged: the
-    // rotation is identical signer-side and verifier-side; only the ordering
-    // SOURCE changed from live table to committed snapshot).
-    uint32_t offset = (uint32_t)(block_height % count);
-    for (uint32_t pos = 0; pos < count; pos++) {
-        const uint8_t *a = non_proposers[(pos + offset) % count];
-        if (memcmp(a, my_address, 32) == 0)
-            return (int)(pos + 1);
+    for (int pos = 0; pos < count; pos++) {
+        if (memcmp(non_proposers[pos], my_address, 32) == 0)
+            return pos + 1;
     }
 
     return -1;  // Not in the canonical signing set
@@ -755,25 +819,92 @@ int mxd_add_validator_signature_to_block(mxd_block_t *block, const uint8_t valid
         }
     }
     
-    // Verify sequential signing order: chain_position must match current validation_count
+    // Verify sequential signing order: chain_position must match current validation_count.
+    // v11 convergence (MXD-CONS-01 §3.5): two live validators can both take position K
+    // when the lower-ranked signature was delayed in flight, and the two chains never
+    // merge by themselves (devnet 2026-11-04: blocks stuck at 3 signatures). The chain
+    // whose signer at the first differing position has the lower rank is canonical:
+    // when an incoming signature for an occupied position K outranks our signer there,
+    // drop our positions >= K and admit it. Higher or equal rank: keep ours.
+    uint32_t saved_count = 0;
+    mxd_validator_signature_t *saved = NULL;
     if (chain_position != block->validation_count) {
-        MXD_LOG_WARN("rsc", "Out-of-order signature: chain_position=%u but validation_count=%u (block %u)",
-                     chain_position, block->validation_count, block->height);
-        return -1;
-    }
-
-    // Verify the signer is the expected validator at this position in the signing order
-    const mxd_rapid_table_t *order_table = mxd_get_rapid_table();
-    if (order_table && order_table->count > 0) {
-        int expected_pos = mxd_get_my_signing_position(order_table, block->proposer_id, validator_id, block->height);
-        if (expected_pos < 0) {
-            MXD_LOG_WARN("rsc", "Signer not in signing order for block %u", block->height);
+        if (!(block->version >= MXD_PROTOCOL_VERSION_11 && chain_position > 0 &&
+              chain_position < block->validation_count && block->validation_chain)) {
+            MXD_LOG_WARN("rsc", "Out-of-order signature: chain_position=%u but validation_count=%u (block %u)",
+                         chain_position, block->validation_count, block->height);
             return -1;
         }
-        if ((uint32_t)expected_pos != chain_position) {
-            MXD_LOG_WARN("rsc", "Signer at wrong position: expected %d, got %u (block %u)",
-                         expected_pos, chain_position, block->height);
+        mxd_block_t prefix = *block;            // shallow, read-only view of positions < K
+        prefix.validation_count = chain_position;
+        int rank_in = mxd_signing_rank(&prefix, validator_id);
+        int rank_loc = mxd_signing_rank(&prefix, block->validation_chain[chain_position].validator_id);
+        if (rank_in < 0 || rank_loc < 0 || rank_in >= rank_loc ||
+            timestamp < mxd_signing_not_before_ms(&prefix, rank_in)) {
+            MXD_LOG_DEBUG("rsc", "Competing signature at position %u of block %u ignored (rank %d, local rank %d)",
+                          chain_position, block->height, rank_in, rank_loc);
             return -1;
+        }
+        // Keep what we are about to drop until the incoming signature verifies.
+        saved_count = block->validation_count - chain_position;
+        saved = malloc((size_t)saved_count * sizeof(*saved));
+        if (!saved) return -1;
+        memcpy(saved, &block->validation_chain[chain_position], (size_t)saved_count * sizeof(*saved));
+        block->validation_count = chain_position;
+        MXD_LOG_INFO("rsc", "v11 convergence: position %u of block %u offered by a rank-%d signer; replacing the rank-%d signer and %u later signature(s)",
+                     chain_position, block->height, rank_in, rank_loc, saved_count - 1);
+    }
+
+    // Verify the signer is admissible at this chain position.
+    if (block->version >= MXD_PROTOCOL_VERSION_11) {
+        // v11: deterministic skip (MXD-CONS-01 §3.5). Position 0 belongs to the
+        // proposer; from position 1 the signer must be the first validator of
+        // the canonical order not yet in the chain, or a later one whose signed
+        // timestamp is at least rank * MXD_SIGN_SKIP_MS after the previous
+        // signature. Evaluated from the chain content and the committed order
+        // only, so every node reaches the same verdict.
+        if (chain_position == 0) {
+            if (memcmp(validator_id, block->proposer_id, 32) != 0) {
+                MXD_LOG_WARN("rsc", "Position 0 signer is not the proposer (block %u)", block->height);
+                return -1;
+            }
+        } else {
+            int rank = mxd_signing_rank(block, validator_id);
+            if (rank == -2) {
+                MXD_LOG_WARN("rsc", "Cannot derive the committed signer order for block %u; refusing signature at position %u",
+                             block->height, chain_position);
+                goto fail;
+            }
+            if (rank < 0) {
+                MXD_LOG_WARN("rsc", "Signer not admissible at position %u of block %u (not in the canonical set or already signed)",
+                             chain_position, block->height);
+                goto fail;
+            }
+            uint64_t not_before = mxd_signing_not_before_ms(block, rank);
+            if (timestamp < not_before) {
+                MXD_LOG_WARN("rsc", "Rank-%d signer too early at position %u of block %u (ts=%llu, allowed from %llu)",
+                             rank, chain_position, block->height,
+                             (unsigned long long)timestamp, (unsigned long long)not_before);
+                goto fail;
+            }
+            if (rank > 0) {
+                MXD_LOG_INFO("rsc", "v11 skip: rank-%d signer admitted at position %u of block %u",
+                             rank, chain_position, block->height);
+            }
+        }
+    } else {
+        const mxd_rapid_table_t *order_table = mxd_get_rapid_table();
+        if (order_table && order_table->count > 0) {
+            int expected_pos = mxd_get_my_signing_position(order_table, block->proposer_id, validator_id, block->height);
+            if (expected_pos < 0) {
+                MXD_LOG_WARN("rsc", "Signer not in signing order for block %u", block->height);
+                return -1;
+            }
+            if ((uint32_t)expected_pos != chain_position) {
+                MXD_LOG_WARN("rsc", "Signer at wrong position: expected %d, got %u (block %u)",
+                             expected_pos, chain_position, block->height);
+                return -1;
+            }
         }
     }
 
@@ -798,27 +929,27 @@ int mxd_add_validator_signature_to_block(mxd_block_t *block, const uint8_t valid
     size_t publen = 0;
     if (mxd_get_validator_public_key(validator_id, pubbuf, sizeof(pubbuf), &publen) != 0) {
         MXD_LOG_ERROR("rsc", "Failed to get validator public key for signature verification");
-        return -1;
+        goto fail;
     }
 
     // Verify signature
     if (mxd_sig_verify(algo_id, signature, signature_length, msg, sizeof(msg), pubbuf) != 0) {
         MXD_LOG_ERROR("rsc", "Chain signature verification failed for validator at position %u", chain_position);
-        return -1;
+        goto fail;
     }
     
     if (!block->validation_chain) {
         block->validation_capacity = 10;
         block->validation_chain = malloc(block->validation_capacity * sizeof(mxd_validator_signature_t));
         if (!block->validation_chain) {
-            return -1;
+            goto fail;
         }
     } else if (block->validation_count >= block->validation_capacity) {
         size_t new_capacity = block->validation_capacity * 2;
         mxd_validator_signature_t *new_chain = realloc(block->validation_chain, 
                                                      new_capacity * sizeof(mxd_validator_signature_t));
         if (!new_chain) {
-            return -1;
+            goto fail;
         }
         block->validation_chain = new_chain;
         block->validation_capacity = new_capacity;
@@ -852,7 +983,15 @@ int mxd_add_validator_signature_to_block(mxd_block_t *block, const uint8_t valid
         }
     }
 
+    free(saved);
     return 0;
+fail:
+    if (saved) {
+        memcpy(&block->validation_chain[chain_position], saved, (size_t)saved_count * sizeof(*saved));
+        block->validation_count = chain_position + saved_count;
+        free(saved);
+    }
+    return -1;
 }
 
 int mxd_verify_validation_chain_integrity(const mxd_block_t *block) {

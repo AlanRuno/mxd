@@ -24,6 +24,14 @@ extern "C" {
  *       prefixed to validator/p2p/bridge/consensus signed payloads, P2P
  *       handshake protocol_version bumped 5->6. Wire-format-breaking;
  *       requires fresh genesis on all networks.
+ * - v11: (1) the block hash binds proposer_id (32 bytes appended to the hashed
+ *        header), so competing proposals with identical content no longer
+ *        collide on one hash; (2) deterministic signer skip in the validation
+ *        chain: at position K the signer must be the first validator of the
+ *        canonical order not yet in the chain, or a later one whose signed
+ *        timestamp is at least rank × MXD_SIGN_SKIP_MS after the previous
+ *        signature — so an offline validator delays the chain by 10 s per rank
+ *        instead of stalling it below quorum. Same wire format.
  * - v10: PQ-only validator admission — a block-embedded JOIN (and the gossip
  *        JOIN request behind it) is valid only for a Dilithium5 (ML-DSA-87)
  *        identity. Existing members are untouched; genesis (h=0) is exempt.
@@ -51,8 +59,9 @@ extern "C" {
 #define MXD_PROTOCOL_VERSION_8 8
 #define MXD_PROTOCOL_VERSION_9 9
 #define MXD_PROTOCOL_VERSION_10 10
+#define MXD_PROTOCOL_VERSION_11 11
 
-#define MXD_CURRENT_PROTOCOL_VERSION MXD_PROTOCOL_VERSION_10
+#define MXD_CURRENT_PROTOCOL_VERSION MXD_PROTOCOL_VERSION_11
 
 // Activation heights for protocol upgrades
 // These define when new protocol versions become mandatory
@@ -66,6 +75,7 @@ typedef struct {
     uint32_t v8_activation_height;  // Peer-driven EVICT block field (Phase 3 validator-mgmt)
     uint32_t v9_activation_height;  // Evicted validators dropped from committed scores / proposer+signing order
     uint32_t v10_activation_height; // Validator JOIN admitted only for Dilithium5 identities
+    uint32_t v11_activation_height; // proposer_id in the block hash + deterministic signer skip
 } mxd_activation_heights_t;
 
 // Network-specific activation heights

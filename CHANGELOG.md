@@ -12,6 +12,82 @@ versions track the C library and tooling as a whole.
 
 ## [Unreleased]
 
+## [0.4.0] — Protocol v11, HTTP response fix
+
+The code behind the five mainnet validators since 2026-11-08. Protocol v11 activates on
+mainnet at height 60 (testnet 37990, devnet 0): nodes running v0.3.0 or earlier must upgrade
+before then or they will reject the v11 blocks. This release also fixes an out-of-bounds read
+in the node HTTP API (see Security); operators exposing port 8080 should upgrade now.
+
+### Changed
+
+- **Consensus — protocol v11 (`src/blockchain/mxd_blockchain.c`, `src/blockchain/mxd_rsc.c`,
+  `src/mxd_blockchain_sync.c`, `src/blockchain/mxd_blockchain_validation.c`):**
+  (1) the block hash binds `proposer_id` (32 bytes appended to the hashed header), so a
+  primary and a fallback proposer building the same content no longer produce one hash
+  that every node then holds with a different position-0 signature (mainnet block 47);
+  (2) deterministic signer skip in the validation chain — at position K the signer must be
+  the first validator of the canonical order not yet in the chain, or a later one whose
+  signed timestamp is at least rank × `MXD_SIGN_SKIP_MS` (10 s) after the previous
+  signature. Until now an offline validator in the signing order stalled every block below
+  quorum on every node (mainnet blocks 30, 33, 34, 36, 38, 39, 43, 47); from v11 it costs
+  at most 10 s per absent validator per block: a validator that was passed over moves
+  behind every validator that was not, so it is not expected first again at the next
+  position. Signers re-check the tip once a second while they wait. Activation: mainnet height 60, testnet 37990, devnet 0. Spec: MXD-CONS-01 1.4.0 §3.5,
+  MXD-00 block-version registry. Tests: `tests/test_consensus_v11.c`.
+
+### Fixed
+
+- **HTTP API — memory growth on `GET /utxos/<addr32>` (`src/mxd_monitoring.c`):** the response
+  body was never freed, so the node kept the size of each response for every lookup.
+
+- **Consensus — v11 convergence and non-blocking gossip (`src/blockchain/mxd_rsc.c`,
+  `src/mxd_blockchain_sync.c`, `src/mxd_validation_handler.c`, `src/mxd_p2p.c`):** two live
+  validators could both take the same chain position when the lower-ranked signature was
+  delayed in flight, and the two chains never merged (devnet: blocks stuck at 3 of 5
+  signatures with one validator down). A signature for an occupied position now replaces
+  the local signer when it outranks it on the shared prefix, dropping what was built on the
+  replaced one; the same rule adopts a diverging chain during catch-up. The delay itself
+  came from the signature broadcast dialling the dead validator inline (one connect
+  timeout per message); consensus broadcasts now use existing connections only
+  (`mxd_send_message_if_connected`) and leave re-dialling to the connector thread.
+
+- **Config (`src/mxd_config.c`):** `network_type` accepts `devnet`. The value was already
+  understood by the protocol-version table (v11 from genesis) but rejected by the config
+  validator, which silently fell back to the defaults — no bootstrap peers, so a devnet
+  never formed a genesis block. A devnet now also keeps its configured bootstrap list
+  instead of replacing it with the public bootstrap API answer (which only knows mainnet and
+  testnet, so a devnet ended up dialling the mainnet validators).
+- **Block signing (`src/mxd_blockchain_sync.c`):** `mxd_sign_and_broadcast_block` is serialized
+  and re-reads the stored copy of the block before deciding. The consensus thread and the
+  message handlers could both decide to sign the same block from a stale copy, so a
+  validator signed the same position twice and peers logged duplicate signatures.
+- **NTP (`src/mxd_ntp.c`):** after a failed synchronization the node waits a minute before
+  trying again instead of retrying on every call. While the NTP pool was unreachable every
+  signature check and every signing blocked for the receive timeouts (about 3 s), which
+  stretched consensus rounds enough to trigger signer skips and 60 s timestamp rejections.
+
+- **Chain continuity and height index (`src/mxd_blockchain_db.c`, `src/node/main.c`):** a
+  block at the next height was appended whatever its `prev_block_hash` said, so a losing
+  fork candidate could stay under the height key while the canonical chain continued from
+  its sibling (mainnet node-2, height 35). A block that extends a stored sibling of the
+  indexed block now promotes that sibling first (depth-1 reorg); a block whose parent is
+  unknown is refused and left to the sync path. At start-up `mxd_repair_height_index`
+  walks the chain from the tip and re-points any height key at the tip's real ancestor,
+  flagging the rare case where the two blocks carry different transactions.
+
+### Security
+
+- **HTTP API — out-of-bounds read in responses over 16 KB (`src/mxd_monitoring.c`,
+  affects v0.3.0 and earlier):** every response was formatted into a 16 KB stack buffer and
+  sent with the length `snprintf` reported, not the length it wrote. A larger response lost
+  its end and carried node stack memory instead, which could include data from earlier
+  requests to the same node. `GET /utxos/<addr32>` exceeded the limit from about 80 outputs;
+  `/block/<n>`, `/validators` and `/wallet` shared the path. Headers now use their own
+  buffer and the body is sent whole, within 30 s per response. The format is unchanged.
+  Mainnet validators run the fix since 2026-11-08; no mainnet response had exceeded 16 KB
+  before then. Tests: `tests/test_http_response.c`.
+
 ## [0.3.0] — Protocol v9/v10, ML-DSA-87 validator set, P2P and log fixes
 
 The code behind the five mainnet validators since 2026-11-04. Protocol v9 and v10 have been

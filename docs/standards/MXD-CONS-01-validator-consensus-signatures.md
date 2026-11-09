@@ -3,9 +3,9 @@
 | Field | Value |
 |---|---|
 | **Status** | Draft |
-| **Version** | 1.0.0 |
+| **Version** | 1.4.0 |
 | **Created** | 2026-05-06 |
-| **Updated** | 2026-05-06 |
+| **Updated** | 2026-11-04 |
 | **Author(s)** | MXD Project |
 | **Requires** | MXD-01, MXD-03 |
 
@@ -23,7 +23,7 @@ All three use distinct domain tags from the MXD-00 Domain-Tag Registry (`"MXD-CO
 
 | Term | Meaning |
 |---|---|
-| `block_hash` | The 64-byte SHA-512 hash of the block header (excluding the validation_chain itself, the validator_signatures field, and the total_supply field). |
+| `block_hash` | The 64-byte SHA-512 hash of the block header (excluding the validation_chain itself, the validator_signatures field, and the total_supply field). From block-protocol v11 the hashed header also includes `proposer_id` (MXD-00 block-version registry, row 11), so two proposals with identical content from different proposers are distinct blocks. |
 | `chain_position` | The 0-based index of a signature within a block's `validation_chain` array. |
 | `chain_hash` | A cumulative cryptographic commitment over all prior signatures in a validation chain. Defined in §3.1. |
 | `addr32` | The 32-byte MXD-01 address of the signing validator. |
@@ -95,6 +95,24 @@ A node verifying a block's validation chain MUST:
 Pre-v7 the storage path checked only the structural invariants of §3.3.1 (sequential chain_position, monotonic timestamps, validator uniqueness). A block delivered through a path that bypassed the signature-by-signature P2P ingest (e.g., bulk sync, validation-chain relay, locally-proposed blocks at storage time) could be persisted with structurally-valid but cryptographically-forged signatures. v7 closes this gap: `mxd_verify_validation_chain_integrity` now invokes the full `mxd_verify_validation_chain` (§3.3) on every storage path, not just on the structural invariants.
 
 The performance cost is bounded: each block carries at most one signature per rapid-table member (typically 5–10 in mainnet/testnet), and the `chain_hash` recomputation is `O(N²)` in the chain length but with `N ≤ 10` and SHA-512 throughput, it is negligible at the block-store cadence (one block per ~5 seconds).
+
+### 3.5 Signer admission and deterministic skip (protocol v11)
+
+**Canonical signing order.** For a block at height `H` with proposer `P`: position 0 is `P`; positions `1..N-1` are the validators of the committed `validator_scores` of block `H-1`, ranked exactly as for proposer selection (`chain_score` descending, address ascending), with `P` removed and the remaining list rotated left by `H mod (N-1)`. Genesis (`H = 0`) has no committed predecessor and uses the live membership instead.
+
+**Pre-v11 rule.** The signer at position `K` had to be the validator at canonical position `K`. A validator that is offline (or being restarted, or whose identity has just been rotated) therefore stalls the chain of every block at its position, below quorum, on every node — observed on mainnet in October 2026 (blocks 30, 33, 34, 36, 38, 39, 43, 47). Nothing in the protocol let the remaining validators continue.
+
+**v11 rule.** Let `R_1` be the canonical order (positions `≥ 1`). For `K ≥ 2`, `R_K` is derived from `R_{K-1}` by removing the signer at position `K-1` and moving the `j_{K-1}` validators that were ahead of it in `R_{K-1}` (the ones it was admitted ahead of) to the end of the list, in their order. For `K ≥ 1` the signer at position `K`:
+
+1. MUST be `R_K[j]` for some `j ≥ 0`; `j` is the signer's *rank* (the number of validators ahead of it in `R_K`).
+2. If `j > 0`, MUST carry `validation_chain[K].timestamp ≥ validation_chain[K-1].timestamp + j · SKIP_MS`, with `SKIP_MS = 10 000` (`MXD_SIGN_SKIP_MS`). Rank 0 carries no extra constraint beyond §3.3.
+3. Position 0 MUST be the proposer `P`.
+
+The rule is evaluated from the chain content and the committed order alone; it does not depend on any node's clock, so every node reaches the same verdict (§3.3 keeps the ±60 s liveness window on live admission). A validator that has already signed, or that is not in the canonical set, is rejected at any position.
+
+**Signer behaviour (normative for the reference implementation).** A validator of rank 0 signs as soon as it holds the block and the chain prefix. A validator of rank `j > 0` waits until `validation_chain[K-1].timestamp + j · SKIP_MS` has elapsed on its own clock and no signature for position `K` has arrived, then signs with its current timestamp (which satisfies rule 2 by construction); it re-checks the tip at least once a second while waiting. A validator that was passed over moves behind every validator that has not been passed over; it can still sign later (rank `j`, with the corresponding wait), but an absent validator costs one `SKIP_MS` slot per block, not one per position.
+
+**Properties.** With `N` validators and `f` of them offline, the chain reaches `N - f` signatures after at most `10 s` per offline validator (`f · SKIP_MS` in total), so quorum (`⌈2N/3⌉`) is reached whenever `f ≤ N - ⌈2N/3⌉` (one offline validator out of five). Two live validators can still race for a position when the lower-ranked signature is delayed in flight by more than `SKIP_MS`; the resulting chains for one block MUST converge: a node holding signer `X` at position `K` that receives a valid signature by `Y` for the same position, with `rank(Y) < rank(X)` on the shared prefix `0..K-1`, replaces `X` by `Y` and discards its positions `> K` (the displaced validators sign again on the adopted chain); a competing signature of equal or higher rank is ignored. The rule applies to single gossiped signatures and to whole chains received during catch-up, so every node ends on the chain whose signer at the first differing position has the lowest rank. The proposer-side "skip" timer of v5 (`MXD_VALIDATOR_SIGN_TIMEOUT_MS`) only affected what the proposer waited for and is superseded by this rule.
 
 ## 4. Validator join / exit signatures
 
@@ -221,3 +239,4 @@ A future spec MAY introduce `"MXD-CONS-2\0"` to disambiguate further if the oper
 | 2026-05-06 | 1.0.0 | Initial draft. Formalizes the v7 validation chain signed bytes, the validator join/exit signed bytes, the genesis announce signed bytes, and the storage-path crypto verification rule. Closes audit findings L6-4, L6-5, concern 2. |
 | 2026-10-09 | 1.2.1 | v9: evicted validators are dropped from the committed `validator_scores`, hence from the proposer rotation and the signing order (§4.2 note). Found during the mainnet PQ validator rotation. |
 | 2026-10-11 | 1.3.0 | v10: JOIN admission is Dilithium5-only from the activation height (§4.2 item 4). Mainnet validators are 100 % ML-DSA-87 since 2026-10-09. |
+| 2026-11-04 | 1.4.0 | v11: §3.5 signer admission with deterministic skip (rank × 10 s), replacing the exact-position rule that stalled blocks below quorum whenever a validator was offline; `block_hash` binds `proposer_id` (§2). Found during the November 2026 mainnet review. |

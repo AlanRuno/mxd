@@ -156,6 +156,29 @@ static int verify_validation_chain_impl(const mxd_block_t *block, int check_time
                 return -1;
             }
         }
+        // v11: signer admission with deterministic skip (MXD-CONS-01 §3.5).
+        // Position 0 is the proposer; from position 1 the signer's rank among
+        // the canonical-order validators not yet in the chain bounds the
+        // earliest timestamp it may carry. When the committed order cannot
+        // be derived here (parent not stored, test fixture) the cryptographic
+        // guarantee below still holds and the rule is not applied.
+        if (block->version >= MXD_PROTOCOL_VERSION_11) {
+            if (i == 0) {
+                if (memcmp(sig_i->validator_id, block->proposer_id, 32) != 0) {
+                    return -1;
+                }
+            } else {
+                mxd_block_t prefix = *block;   /* shallow view of the chain before position i */
+                prefix.validation_count = i;
+                int rank = mxd_signing_rank(&prefix, sig_i->validator_id);
+                if (rank == -1) {
+                    return -1;
+                }
+                if (rank >= 0 && sig_i->timestamp < mxd_signing_not_before_ms(&prefix, rank)) {
+                    return -1;
+                }
+            }
+        }
 
         // v7 canonical: MXD-CONS-1 (11) || block_hash(64) || chain_hash(64) || ts_be(8) = 147 bytes
         // chain_hash is the strong cumulative commitment to all prior signatures

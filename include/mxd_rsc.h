@@ -243,6 +243,30 @@ int mxd_get_my_signing_position(const mxd_rapid_table_t *table,
                                 const uint8_t my_address[32],
                                 uint64_t block_height);
 
+// v11 — deterministic signer skip.
+//
+// Before v11 the signer at chain position K had to be exactly validator K of
+// the canonical signing order; an offline validator at K stalled the chain of
+// every block at K, below quorum, on every node (mainnet 2026-10). From v11,
+// at chain position K (K >= 1) the admitted signer is the FIRST validator of
+// the canonical order not yet in the chain (rank 0), or a later one (rank j)
+// whose signed timestamp is at least j * MXD_SIGN_SKIP_MS after the previous
+// signature's timestamp. Every node evaluates the same rule from the chain
+// content and the committed order alone.
+#define MXD_SIGN_SKIP_MS 10000ULL
+
+// Rank of `validator_id` among the canonical-order validators that have not
+// signed `block` yet: 0 = the next expected signer, 1 = may sign after one
+// skip window, … Returns -1 when the validator is the proposer, is not in
+// the canonical set, has already signed, or the committed order of
+// block->height cannot be derived (fail-loud, like mxd_get_my_signing_position).
+int mxd_signing_rank(const mxd_block_t *block, const uint8_t validator_id[32]);
+
+// Earliest signed timestamp (ms) at which a signer of rank `rank` may take the
+// next chain position of `block`: the previous signature's timestamp plus
+// rank * MXD_SIGN_SKIP_MS (0 when the block has no signature yet).
+uint64_t mxd_signing_not_before_ms(const mxd_block_t *block, int rank);
+
 // Compute chain_hash for a given position from the validation chain
 // Position 0: chain_hash = SHA-512(block_hash)
 // Position N: chain_hash = SHA-512(prev_chain_hash || prev_signature_bytes)
